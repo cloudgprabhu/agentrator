@@ -162,3 +162,17 @@ export type {
   DetectedProjectInfo,
   GenerateConfigOptions,
 } from "./config-generator.js";
+
+// Config migration — migrate legacy config and relocate session metadata
+export {
+  getDefaultMigratedConfigPath,
+  migrateLegacyConfig,
+  migrateLegacyConfigFile,
+  relocateLegacySessionMetadata,
+} from "./config-migration.js";
+export type {
+  ConfigMigrationResult,
+  SessionMetadataRelocationProjectResult,
+  SessionMetadataRelocationSkippedEntry,
+  SessionMetadataRelocationResult,
+} from "./config-migration.js";
