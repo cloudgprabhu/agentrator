@@ -73,10 +73,18 @@ vi.mock("@composio/ao-core/task-plan", async () => {
 });
 
 vi.mock("@composio/ao-core/task-lineage", async () => {
-  const { taskLineageToYaml, auditTaskLineageFile, updateTaskLineageTaskPlanPath } = await import(
-    "../../../core/src/task-lineage.js"
-  );
-  return { taskLineageToYaml, auditTaskLineageFile, updateTaskLineageTaskPlanPath };
+  const {
+    taskLineageToYaml,
+    auditTaskLineageFile,
+    findTaskPlanRelocationCandidates,
+    updateTaskLineageTaskPlanPath,
+  } = await import("../../../core/src/task-lineage.js");
+  return {
+    taskLineageToYaml,
+    auditTaskLineageFile,
+    findTaskPlanRelocationCandidates,
+    updateTaskLineageTaskPlanPath,
+  };
 });
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
@@ -200,7 +208,9 @@ beforeEach(() => {
   });
   mockSessionManager.list.mockResolvedValue([]);
   mockTracker.isCompleted.mockResolvedValue(false);
-  mockTracker.issueUrl.mockImplementation((issueId: string) => `https://tracker.test/issues/${issueId}`);
+  mockTracker.issueUrl.mockImplementation(
+    (issueId: string) => `https://tracker.test/issues/${issueId}`,
+  );
   mockTracker.issueLabel.mockImplementation((url: string) => {
     const issueId = url.split("/").pop() ?? "unknown";
     return `#${issueId}`;
@@ -297,7 +307,9 @@ describe("workflow command", () => {
     expect(spawnCall?.prompt).toContain("README.md");
     expect(spawnCall?.prompt).toContain("docs/specs/planning.md");
 
-    const lineage = readTaskLineageFile(join(tmpDir, "main-repo", "docs", "plans", "int-42.lineage.yaml"));
+    const lineage = readTaskLineageFile(
+      join(tmpDir, "main-repo", "docs", "plans", "int-42.lineage.yaml"),
+    );
     expect(lineage.parentIssue).toBe("INT-42");
     expect(lineage.planningSession?.sessionId).toBe("app-1");
   });
@@ -729,7 +741,9 @@ describe("workflow command", () => {
       ]),
     ).rejects.toThrow("process.exit(1)");
 
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Workflow lineage audit for my-app"));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Workflow lineage audit for my-app"),
+    );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("parent_issue_drift"));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("missing_child_refs"));
   });
@@ -798,6 +812,78 @@ describe("workflow command", () => {
     expect(repaired.taskPlanPath).toBe("docs/plans/int-42-fixed.task-plan.yaml");
     expect(repaired.childIssues[0]?.state).toBe("waiting_review");
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("applied safe fixes"));
+  });
+
+  it("reports a moved task-plan candidate but requires an explicit override to repair lineage", async () => {
+    const plansDir = join(tmpDir, "main-repo", "docs", "plans");
+    const archiveDir = join(tmpDir, "main-repo", "docs", "archive");
+    const lineagePath = join(plansDir, "int-42.lineage.yaml");
+    const movedPlanPath = join(archiveDir, "int-42-moved.task-plan.yaml");
+    mkdirSync(plansDir, { recursive: true });
+    mkdirSync(archiveDir, { recursive: true });
+    writeFileSync(
+      movedPlanPath,
+      [
+        "version: 1",
+        "parentIssue: INT-42",
+        "specPath: null",
+        "adrPath: null",
+        "childTasks:",
+        "  - title: Define schema",
+        "    summary: Add validator",
+        "    acceptanceCriteria:",
+        "      - Validator exists",
+        "    dependencies: []",
+        "    suggestedFiles: []",
+        "    labels: []",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      lineagePath,
+      [
+        "version: 1",
+        "projectId: my-app",
+        "parentIssue: INT-42",
+        "taskPlanPath: docs/plans/int-42.task-plan.yaml",
+        "trackerPlugin: github",
+        "createdAt: 2026-03-14T09:00:00.000Z",
+        "planningSession: null",
+        "childIssues:",
+        "  - taskIndex: 0",
+        "    title: Define schema",
+        "    issueId: '101'",
+        "    issueUrl: https://tracker.test/issues/101",
+        "    issueLabel: '#101'",
+        "    labels: []",
+        "    dependencies: []",
+        "    state: queued",
+        "    implementationSessions: []",
+        "    reviewSessions: []",
+        "    pr: null",
+        "",
+      ].join("\n"),
+    );
+
+    await expect(
+      program.parseAsync([
+        "node",
+        "test",
+        "workflow",
+        "audit-lineage",
+        "my-app",
+        "--lineage",
+        "docs/plans/int-42.lineage.yaml",
+        "--repair",
+      ]),
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("task_plan_unreadable"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("task_plan_relocation_candidate"));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("--task-plan docs/archive/int-42-moved.task-plan.yaml --repair"),
+    );
+    expect(readTaskLineageFile(lineagePath).taskPlanPath).toBe("docs/plans/int-42.task-plan.yaml");
   });
 
   it("starts implementation sessions for eligible child issues", async () => {
@@ -884,7 +970,9 @@ describe("workflow command", () => {
       issueId: "102",
       role: "implementer",
     });
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Workflow implementation for INT-42"));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Workflow implementation for INT-42"),
+    );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("#101"));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("#102"));
     expect(readTaskLineageFile(lineagePath).childIssues.map((child) => child.state)).toEqual([
@@ -1190,9 +1278,15 @@ describe("workflow command", () => {
     expect(spawnCall?.prompt).toContain("Current lineage state: changes_requested");
   });
 
-  it("resolves a moved task-plan file automatically for workflow review when there is one valid match", async () => {
+  it("requires explicit task-plan relocation before workflow review continues", async () => {
     const lineagePath = join(tmpDir, "main-repo", "docs", "plans", "int-42.lineage.yaml");
-    const movedPlanPath = join(tmpDir, "main-repo", "docs", "archive", "int-42-moved.task-plan.yaml");
+    const movedPlanPath = join(
+      tmpDir,
+      "main-repo",
+      "docs",
+      "archive",
+      "int-42-moved.task-plan.yaml",
+    );
     mkdirSync(join(tmpDir, "main-repo", "docs", "plans"), { recursive: true });
     mkdirSync(join(tmpDir, "main-repo", "docs", "archive"), { recursive: true });
     writeFileSync(
@@ -1259,12 +1353,16 @@ describe("workflow command", () => {
       metadata: {},
     });
 
-    await program.parseAsync(["node", "test", "workflow", "review", "my-app", "#101"]);
+    await expect(
+      program.parseAsync(["node", "test", "workflow", "review", "my-app", "#101"]),
+    ).rejects.toThrow("process.exit(1)");
 
-    const spawnCall = mockSessionManager.spawn.mock.calls.at(-1)?.[0];
-    expect(spawnCall?.prompt).toContain("Review the relocated task plan content.");
-    expect(spawnCall?.prompt).toContain("docs/archive/int-42-moved.task-plan.yaml (resolved after move)");
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("docs/archive/int-42-moved.task-plan.yaml"));
+    expect(mockSessionManager.spawn).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "ao workflow relocate-task-plan my-app INT-42 docs/archive/int-42-moved.task-plan.yaml",
+      ),
+    );
   });
 
   it("records an approve outcome on the child issue and updates lineage state", async () => {
@@ -1813,7 +1911,15 @@ describe("workflow command", () => {
       ].join("\n"),
     );
 
-    await program.parseAsync(["node", "test", "workflow", "set-state", "my-app", "#101", "blocked"]);
+    await program.parseAsync([
+      "node",
+      "test",
+      "workflow",
+      "set-state",
+      "my-app",
+      "#101",
+      "blocked",
+    ]);
 
     expect(readTaskLineageFile(lineagePath).childIssues[0]?.state).toBe("blocked");
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("in_progress -> blocked"));
@@ -1882,9 +1988,13 @@ describe("workflow command", () => {
       "docs/archive/int-42.task-plan.yaml",
     ]);
 
-    expect(readTaskLineageFile(lineagePath).taskPlanPath).toBe("docs/archive/int-42.task-plan.yaml");
+    expect(readTaskLineageFile(lineagePath).taskPlanPath).toBe(
+      "docs/archive/int-42.task-plan.yaml",
+    );
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("docs/plans/int-42.task-plan.yaml -> docs/archive/int-42.task-plan.yaml"),
+      expect.stringContaining(
+        "docs/plans/int-42.task-plan.yaml -> docs/archive/int-42.task-plan.yaml",
+      ),
     );
   });
 
@@ -2001,9 +2111,7 @@ describe("workflow command", () => {
       program.parseAsync(["node", "test", "workflow", "create-issues", "my-app", planPath]),
     ).rejects.toThrow("process.exit(1)");
 
-    expect(errSpy).toHaveBeenCalledWith(
-      expect.stringContaining('does not support issue creation'),
-    );
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("does not support issue creation"));
   });
 
   it("fails when concurrency is not a positive integer", async () => {

@@ -1,5 +1,5 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { parse as parseYaml, stringify as yamlStringify } from "yaml";
 import { z } from "zod";
 import type { PRState, Session } from "./types.js";
@@ -43,9 +43,7 @@ function formatIssuePath(path: (string | number)[]): string {
 }
 
 function formatZodError(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${formatIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
+  return error.issues.map((issue) => `${formatIssuePath(issue.path)}: ${issue.message}`).join("; ");
 }
 
 // =============================================================================
@@ -229,7 +227,9 @@ export function repairLineage(
       );
 
     if (otherChildrenWithSameDescription.length > 0) {
-      const duplicateIds = otherChildrenWithSameDescription.map((candidate) => candidate.id).join(", ");
+      const duplicateIds = otherChildrenWithSameDescription
+        .map((candidate) => candidate.id)
+        .join(", ");
       result.warnings.push(
         `Task ${task.id}: parent ${task.parentId} has similar children (${duplicateIds}) — ambiguous relocation, SKIPPING`,
       );
@@ -398,6 +398,11 @@ export interface TaskLineageChildOrPRMatch extends TaskLineageChildMatch {
   matchSource: "issue" | "pr";
 }
 
+export interface TaskPlanRelocationCandidate {
+  filePath: string;
+  taskPlan: TaskPlan;
+}
+
 function normalizeTaskLineageChildStateValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const trimmed = normalizeText(value);
@@ -422,7 +427,9 @@ function normalizeTaskLineageInput(input: unknown): unknown {
     typeof normalized["createdAt"] === "string" ? normalizeText(normalized["createdAt"]) : nowIso;
   normalized["createdAt"] = createdAt;
   normalized["updatedAt"] =
-    typeof normalized["updatedAt"] === "string" ? normalizeText(normalized["updatedAt"]) : createdAt;
+    typeof normalized["updatedAt"] === "string"
+      ? normalizeText(normalized["updatedAt"])
+      : createdAt;
 
   if (Array.isArray(normalized["childIssues"])) {
     normalized["childIssues"] = normalized["childIssues"].map((entry) => {
@@ -432,7 +439,9 @@ function normalizeTaskLineageInput(input: unknown): unknown {
       child["implementationSessions"] = Array.isArray(child["implementationSessions"])
         ? child["implementationSessions"]
         : [];
-      child["reviewSessions"] = Array.isArray(child["reviewSessions"]) ? child["reviewSessions"] : [];
+      child["reviewSessions"] = Array.isArray(child["reviewSessions"])
+        ? child["reviewSessions"]
+        : [];
       if (!("pr" in child)) {
         child["pr"] = null;
       }
@@ -546,6 +555,40 @@ export function listTaskPlanFiles(projectPath: string): string[] {
   return listFilesRecursively(projectPath, [".task-plan.yaml", ".task-plan.yml"]);
 }
 
+function resolveProjectFilePath(projectPath: string, filePath: string): string {
+  return isAbsolute(filePath) ? filePath : join(projectPath, filePath);
+}
+
+function asProjectRelativePath(projectPath: string, filePath: string): string {
+  if (!isAbsolute(filePath)) return filePath;
+  const relativePath = relative(projectPath, filePath);
+  return relativePath.startsWith("..") ? filePath : relativePath;
+}
+
+export function findTaskPlanRelocationCandidates(
+  projectPath: string,
+  parentIssue: string,
+  options: { excludePath?: string } = {},
+): TaskPlanRelocationCandidate[] {
+  const excludedPath = options.excludePath
+    ? resolveProjectFilePath(projectPath, options.excludePath)
+    : null;
+
+  return listTaskPlanFiles(projectPath)
+    .filter((filePath) => filePath !== excludedPath)
+    .map((filePath) => {
+      try {
+        return {
+          filePath,
+          taskPlan: readTaskPlanFile(filePath, { expectedParentIssue: parentIssue }),
+        } satisfies TaskPlanRelocationCandidate;
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry): entry is TaskPlanRelocationCandidate => entry !== null);
+}
+
 function withUpdatedTimestamp(lineage: TaskLineage): TaskLineage {
   return { ...lineage, updatedAt: new Date().toISOString() };
 }
@@ -578,7 +621,10 @@ function matchesPRReference(child: TaskLineageChildIssue, reference: string): bo
   return false;
 }
 
-function updateTaskLineageFile(filePath: string, mutate: (lineage: TaskLineage) => TaskLineage): TaskLineage {
+function updateTaskLineageFile(
+  filePath: string,
+  mutate: (lineage: TaskLineage) => TaskLineage,
+): TaskLineage {
   const current = readTaskLineageFile(filePath);
   const updated = validateTaskLineage(withUpdatedTimestamp(mutate(current)), filePath);
   writeTaskLineageFile(filePath, updated);
@@ -606,7 +652,9 @@ export function findTaskLineageByChildIssue(
     const lineage = readTaskLineageFileSafely(filePath);
     if (!lineage) continue;
 
-    const childIndex = lineage.childIssues.findIndex((child) => matchesIssueReference(child, childIssueRef));
+    const childIndex = lineage.childIssues.findIndex((child) =>
+      matchesIssueReference(child, childIssueRef),
+    );
     if (childIndex === -1) continue;
 
     return { filePath, lineage, childIndex };
@@ -628,7 +676,9 @@ export function findTaskLineageByChildOrPRRef(
     const lineage = readTaskLineageFileSafely(filePath);
     if (!lineage) continue;
 
-    const childIndex = lineage.childIssues.findIndex((child) => matchesPRReference(child, reference));
+    const childIndex = lineage.childIssues.findIndex((child) =>
+      matchesPRReference(child, reference),
+    );
     if (childIndex === -1) continue;
 
     return { filePath, lineage, childIndex, matchSource: "pr" };
@@ -798,8 +848,7 @@ export function recordTaskLineageChildSession(
     const child = lineage.childIssues[match.childIndex];
     if (!child) return lineage;
 
-    const collectionKey =
-      kind === "implementation" ? "implementationSessions" : "reviewSessions";
+    const collectionKey = kind === "implementation" ? "implementationSessions" : "reviewSessions";
     const currentEntries = child[collectionKey];
     const exists = currentEntries.some((entry) => entry.sessionId === sessionRef.sessionId);
     const nextEntries = exists ? currentEntries : [...currentEntries, sessionRef];
@@ -943,10 +992,6 @@ export function updateTaskLineageTaskPlanPath(
   return { filePath: match.filePath, lineage };
 }
 
-function resolveProjectFilePath(projectPath: string, filePath: string): string {
-  return isAbsolute(filePath) ? filePath : join(projectPath, filePath);
-}
-
 export function auditTaskLineageFile(
   projectPath: string,
   filePath: string,
@@ -1011,7 +1056,9 @@ export function auditTaskLineageFile(
       });
     }
 
-    const lineageKeys = new Set(lineage.childIssues.map((child) => `${child.taskIndex}:${child.title}`));
+    const lineageKeys = new Set(
+      lineage.childIssues.map((child) => `${child.taskIndex}:${child.title}`),
+    );
     const missingRefs = taskPlan.childTasks.filter(
       (task, taskIndex) => !lineageKeys.has(`${taskIndex}:${task.title}`),
     );
@@ -1039,6 +1086,35 @@ export function auditTaskLineageFile(
       message: `Task plan could not be read at ${effectiveTaskPlanPath}`,
       repaired: false,
     });
+
+    if (!options.taskPlanPath) {
+      const relocationCandidates = findTaskPlanRelocationCandidates(
+        projectPath,
+        lineage.parentIssue,
+        {
+          excludePath: effectiveTaskPlanFilePath,
+        },
+      );
+      if (relocationCandidates.length === 1) {
+        const candidatePath = asProjectRelativePath(projectPath, relocationCandidates[0].filePath);
+        findings.push({
+          severity: "warning",
+          code: "task_plan_relocation_candidate",
+          message: `Found matching task plan at ${candidatePath}; re-run with --task-plan ${candidatePath} --repair or relocate taskPlanPath explicitly`,
+          repaired: false,
+        });
+      } else if (relocationCandidates.length > 1) {
+        const candidatePaths = relocationCandidates
+          .map((candidate) => asProjectRelativePath(projectPath, candidate.filePath))
+          .join(", ");
+        findings.push({
+          severity: "warning",
+          code: "task_plan_relocation_ambiguous",
+          message: `Found multiple matching task plans (${candidatePaths}); choose one and relocate taskPlanPath explicitly`,
+          repaired: false,
+        });
+      }
+    }
   }
 
   if (options.repair) {
@@ -1082,7 +1158,10 @@ export function auditTaskLineageFile(
       if (finding) finding.repaired = true;
     }
 
-    if (options.taskPlanPath && normalizeText(options.taskPlanPath) !== repairedLineage.taskPlanPath) {
+    if (
+      options.taskPlanPath &&
+      normalizeText(options.taskPlanPath) !== repairedLineage.taskPlanPath
+    ) {
       repairedLineage.taskPlanPath = normalizeText(options.taskPlanPath);
       changed = true;
       const finding = findings.find((entry) => entry.code === "task_plan_override");
