@@ -630,17 +630,17 @@ describe("getActivityState", () => {
     expect(result?.timestamp).toBeInstanceOf(Date);
   });
 
-  it("returns null when process is running but no workspacePath", async () => {
+  it("returns active when process is running but no workspacePath", async () => {
     mockTmuxWithProcess("codex");
     const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: undefined });
-    expect(await agent.getActivityState(session)).toBeNull();
+    expect((await agent.getActivityState(session))?.state).toBe("active");
   });
 
-  it("returns null when process is running but no session file found", async () => {
+  it("returns active when process is running but no session file found", async () => {
     mockTmuxWithProcess("codex");
     mockReaddir.mockRejectedValue(new Error("ENOENT"));
     const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
-    expect(await agent.getActivityState(session)).toBeNull();
+    expect((await agent.getActivityState(session))?.state).toBe("active");
   });
 
   it("returns active when session file was recently modified", async () => {

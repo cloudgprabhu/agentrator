@@ -520,7 +520,7 @@ describe("detectActivity — terminal output classification", () => {
 describe("getActivityState", () => {
   const agent = create();
 
-  it("returns null when opencode session list output is malformed JSON", async () => {
+  it("returns active when opencode session list output is malformed JSON", async () => {
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === "tmux") return Promise.resolve({ stdout: "/dev/ttys003\n", stderr: "" });
       if (cmd === "ps") {
@@ -540,7 +540,7 @@ describe("getActivityState", () => {
       }),
     );
 
-    expect(state).toBeNull();
+    expect(state?.state).toBe("active");
   });
 });
 

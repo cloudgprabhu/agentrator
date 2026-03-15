@@ -248,11 +248,13 @@ function createOpenCodeAgent(): Agent {
             };
           }
         } catch {
-          return null;
+          // Session list unavailable — process is running, assume active
+          return { state: "active", timestamp: new Date() };
         }
       }
 
-      return null;
+      // Process is running but no session ID metadata yet — assume active
+      return { state: "active", timestamp: new Date() };
     },
 
     async isProcessRunning(handle: RuntimeHandle): Promise<boolean> {
