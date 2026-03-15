@@ -69,6 +69,25 @@ const TrackerConfigSchema = z
   })
   .passthrough();
 
+const SCMWebhookReviewerHandoffStoreConfigSchema = z
+  .object({
+    provider: z
+      .enum(["project-local-filesystem", "shared-filesystem"])
+      .default("project-local-filesystem"),
+    path: z.string().optional(),
+    pathEnvVar: z.string().optional(),
+    keyPrefix: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.provider === "shared-filesystem" && !value.path && !value.pathEnvVar) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "scm.webhook.reviewerHandoffStore shared-filesystem provider requires path or pathEnvVar",
+      });
+    }
+  });
+
 const SCMConfigSchema = z
   .object({
     plugin: z.string(),
@@ -81,6 +100,7 @@ const SCMConfigSchema = z
         eventHeader: z.string().optional(),
         deliveryHeader: z.string().optional(),
         maxBodyBytes: z.number().int().positive().optional(),
+        reviewerHandoffStore: SCMWebhookReviewerHandoffStoreConfigSchema.optional(),
       })
       .optional(),
   })

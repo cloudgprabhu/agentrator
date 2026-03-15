@@ -17,10 +17,10 @@ port: 3000
 
 # Default plugins (these are the defaults — you can omit this section)
 defaults:
-  runtime: tmux           # tmux | process | docker | kubernetes | ssh | e2b
-  agent: claude-code      # claude-code | codex | aider | goose | custom
-  workspace: worktree     # worktree | clone | copy
-  notifiers: [desktop]    # desktop | slack | discord | webhook | email
+  runtime: tmux # tmux | process | docker | kubernetes | ssh | e2b
+  agent: claude-code # claude-code | codex | aider | goose | custom
+  workspace: worktree # worktree | clone | copy
+  notifiers: [desktop] # desktop | slack | discord | webhook | email
 
 # Optional provider/auth/model/role/workflow profiles (new schema, backward-compatible)
 # providers:
@@ -88,6 +88,13 @@ projects:
     #     eventHeader: x-github-event
     #     deliveryHeader: x-github-delivery
     #     maxBodyBytes: 1048576
+    #     # Default dedupe uses project-local shared storage under .ao/.
+    #     # If web instances no longer share that project-local state,
+    #     # switch reviewer handoff claims to a shared filesystem mount.
+    #     reviewerHandoffStore:
+    #       provider: shared-filesystem
+    #       pathEnvVar: AO_SHARED_REVIEW_HANDOFF_DIR
+    #       keyPrefix: prod-web
 
     # Files to symlink into workspaces
     # symlinks: [.env, .claude]

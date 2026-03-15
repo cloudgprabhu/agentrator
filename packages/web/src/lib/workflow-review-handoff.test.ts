@@ -232,4 +232,73 @@ describe("maybeAutoSpawnWorkflowReviewer", () => {
     expect(retry?.spawnedSessionId).toBe("reviewer-2");
     expect(sessionManager.spawn).toHaveBeenCalledTimes(2);
   });
+
+  it("uses a shared filesystem store when project-local state is not shared across web instances", async () => {
+    const first = setupWorkflowReviewProject();
+    const second = setupWorkflowReviewProject();
+    const sharedStoreDir = mkdtempSync(join(tmpdir(), "ao-shared-review-store-"));
+    tempDirs.push(sharedStoreDir);
+
+    first.project.scm = {
+      plugin: "github",
+      webhook: {
+        reviewerHandoffStore: {
+          provider: "shared-filesystem",
+          path: sharedStoreDir,
+          keyPrefix: "prod-web",
+        },
+      },
+    };
+    second.project.scm = {
+      plugin: "github",
+      webhook: {
+        reviewerHandoffStore: {
+          provider: "shared-filesystem",
+          path: sharedStoreDir,
+          keyPrefix: "prod-web",
+        },
+      },
+    };
+    first.config.projects["my-app"] = first.project;
+    second.config.projects["my-app"] = second.project;
+
+    const tracker = {
+      issueUrl: vi.fn((issueId: string) => `https://github.com/acme/my-app/issues/${issueId}`),
+    } as unknown as Tracker;
+    const firstSessionManager = {
+      spawn: vi.fn().mockResolvedValue(makeSession("reviewer-3", "reviewer")),
+    } as unknown as SessionManager;
+    const secondSessionManager = {
+      spawn: vi.fn().mockResolvedValue(makeSession("reviewer-4", "reviewer")),
+    } as unknown as SessionManager;
+
+    const initial = await maybeAutoSpawnWorkflowReviewer({
+      config: first.config,
+      projectId: "my-app",
+      project: first.project,
+      tracker,
+      sessionManager: firstSessionManager,
+      sessions: [],
+      event: first.event,
+    });
+
+    const duplicate = await maybeAutoSpawnWorkflowReviewer({
+      config: second.config,
+      projectId: "my-app",
+      project: second.project,
+      tracker,
+      sessionManager: secondSessionManager,
+      sessions: [],
+      event: second.event,
+    });
+
+    expect(initial?.spawnedSessionId).toBe("reviewer-3");
+    expect(duplicate).toEqual({
+      skippedReason: "duplicate_delivery",
+      childIssueId: "101",
+      parentIssue: "INT-42",
+    });
+    expect(firstSessionManager.spawn).toHaveBeenCalledTimes(1);
+    expect(secondSessionManager.spawn).not.toHaveBeenCalled();
+  });
 });

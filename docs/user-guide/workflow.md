@@ -116,4 +116,6 @@ Current child states include:
 
 - Workflow review depends on the task-plan file referenced by lineage still existing.
 - AO now protects lineage writes against mismatched parent/task-plan/child-reference overwrites.
-- Same-process webhook dedupe now suppresses repeated PR update bursts by PR ref plus SHA, but multi-instance web deployments still need shared idempotency.
+- Repeated PR update bursts are deduped by PR ref plus SHA. When web instances do not share
+  project-local state, configure `scm.webhook.reviewerHandoffStore` to use a shared filesystem
+  path for reviewer handoff claims.
