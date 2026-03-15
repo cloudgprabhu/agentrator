@@ -25,7 +25,11 @@ import {
   updateTaskLineageTaskPlanPath,
   upsertTaskLineagePlanningSession,
 } from "@composio/ao-core";
-import { auditTaskLineageFile, taskLineageToYaml } from "@composio/ao-core/task-lineage";
+import {
+  auditTaskLineageFile,
+  findTaskPlanRelocationCandidates,
+  taskLineageToYaml,
+} from "@composio/ao-core/task-lineage";
 import { readTaskPlanFile } from "@composio/ao-core/task-plan";
 import { getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker } from "../lib/lifecycle-service.js";
@@ -110,45 +114,48 @@ function listProjectFiles(rootPath: string, limit = 50): string[] {
   return results.sort();
 }
 
-function listTaskPlanFiles(rootPath: string): string[] {
-  const results: string[] = [];
-  const stack = [rootPath];
+function buildTaskPlanRelocationCommand(
+  projectId: string,
+  parentIssue: string,
+  taskPlanPath: string,
+): string {
+  return `ao workflow relocate-task-plan ${projectId} ${parentIssue} ${taskPlanPath}`;
+}
 
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) continue;
+function buildTaskPlanResolutionError(
+  projectId: string,
+  project: ProjectConfig,
+  lineage: TaskLineage,
+): string {
+  const relocationCandidates = findTaskPlanRelocationCandidates(project.path, lineage.parentIssue, {
+    excludePath: lineage.taskPlanPath,
+  });
+  const relocationHint = "Relocate the task plan explicitly before continuing review.";
 
-    const entries = (() => {
-      try {
-        return readdirSync(current);
-      } catch {
-        return null;
-      }
-    })();
-    if (!entries) continue;
-
-    for (const entry of entries) {
-      if (entry === ".git" || entry === "node_modules") continue;
-      const filePath = join(current, entry);
-      const childEntries = (() => {
-        try {
-          return readdirSync(filePath);
-        } catch {
-          return null;
-        }
-      })();
-      if (childEntries) {
-        stack.push(filePath);
-        continue;
-      }
-
-      if (filePath.endsWith(".task-plan.yaml") || filePath.endsWith(".task-plan.yml")) {
-        results.push(filePath);
-      }
-    }
+  if (relocationCandidates.length === 1) {
+    const candidatePath = asProjectRelativePath(project, relocationCandidates[0].filePath);
+    return [
+      `Task plan for ${lineage.parentIssue} could not be read at ${lineage.taskPlanPath}.`,
+      `Found matching task plan at ${candidatePath}.`,
+      `${relocationHint} Run \`${buildTaskPlanRelocationCommand(projectId, lineage.parentIssue, candidatePath)}\`.`,
+    ].join(" ");
   }
 
-  return results.sort();
+  if (relocationCandidates.length > 1) {
+    const candidatePaths = relocationCandidates
+      .map((candidate) => asProjectRelativePath(project, candidate.filePath))
+      .join(", ");
+    return [
+      `Task plan for ${lineage.parentIssue} could not be read at ${lineage.taskPlanPath}.`,
+      `Found multiple matching task plans: ${candidatePaths}.`,
+      `${relocationHint} Run \`${buildTaskPlanRelocationCommand(projectId, lineage.parentIssue, "<path>")}\` with the correct path.`,
+    ].join(" ");
+  }
+
+  return [
+    `Task plan for ${lineage.parentIssue} could not be read at ${lineage.taskPlanPath}.`,
+    `${relocationHint} Run \`${buildTaskPlanRelocationCommand(projectId, lineage.parentIssue, "<path>")}\` after restoring or locating the task plan.`,
+  ].join(" ");
 }
 
 function requireWorkflowContext(projectId: string): WorkflowContext {
@@ -335,7 +342,10 @@ function buildRequestedChangesPrompt(summary: string): string {
 }
 
 function isTerminalSession(session: Session): boolean {
-  return session.activity === "exited" || ["killed", "done", "merged", "terminated", "cleanup"].includes(session.status);
+  return (
+    session.activity === "exited" ||
+    ["killed", "done", "merged", "terminated", "cleanup"].includes(session.status)
+  );
 }
 
 function ensureTaskPlanMatchesParent(taskPlanPath: string, parentIssue: string): TaskPlan {
@@ -343,6 +353,7 @@ function ensureTaskPlanMatchesParent(taskPlanPath: string, parentIssue: string):
 }
 
 function resolveTaskPlanForReview(
+  projectId: string,
   project: ProjectConfig,
   lineage: TaskLineage,
 ): { taskPlan: TaskPlan; taskPlanPath: string; displayPath: string } {
@@ -353,30 +364,8 @@ function resolveTaskPlanForReview(
       taskPlanPath: configuredPath,
       displayPath: lineage.taskPlanPath,
     };
-  } catch {
-    const matches = listTaskPlanFiles(project.path)
-      .map((filePath) => {
-        try {
-          return {
-            filePath,
-            taskPlan: readTaskPlanFile(filePath, { expectedParentIssue: lineage.parentIssue }),
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry): entry is { filePath: string; taskPlan: TaskPlan } => entry !== null);
-
-    if (matches.length === 1) {
-      const displayPath = `${asProjectRelativePath(project, matches[0].filePath)} (resolved after move)`;
-      return {
-        taskPlan: matches[0].taskPlan,
-        taskPlanPath: matches[0].filePath,
-        displayPath,
-      };
-    }
-
-    throw new Error(`Unable to resolve task plan for ${lineage.parentIssue}`);
+  } catch (error) {
+    throw new Error(buildTaskPlanResolutionError(projectId, project, lineage), { cause: error });
   }
 }
 
@@ -434,7 +423,10 @@ async function handlePlan(
     }
   }
 
-  const lineagePath = resolveProjectFilePath(project, artifactPath.replace(/\.task-plan\.ya?ml$/i, ".lineage.yaml"));
+  const lineagePath = resolveProjectFilePath(
+    project,
+    artifactPath.replace(/\.task-plan\.ya?ml$/i, ".lineage.yaml"),
+  );
   const sessionRef = createTaskLineageSessionRef(session, workflow.parentIssueRole);
   upsertTaskLineagePlanningSession(project.path, parentIssue, sessionRef, {
     version: 1,
@@ -475,7 +467,9 @@ async function handleCreateIssues(
 ): Promise<void> {
   const { project, tracker } = await loadPluginContext(projectId, { requireTracker: true });
   if (!tracker?.createIssue) {
-    exitWithError(`Tracker plugin ${project.tracker?.plugin ?? "<unknown>"} does not support issue creation`);
+    exitWithError(
+      `Tracker plugin ${project.tracker?.plugin ?? "<unknown>"} does not support issue creation`,
+    );
   }
 
   const taskPlanFilePath = resolveProjectFilePath(project, taskPlanPathArg);
@@ -579,7 +573,9 @@ async function handleAuditLineage(
     console.log("applied safe fixes");
   }
 
-  const unresolved = result.findings.some((finding) => finding.severity !== "info" && !finding.repaired);
+  const unresolved = result.findings.some(
+    (finding) => finding.severity !== "info" && !finding.repaired,
+  );
   if (unresolved) {
     process.exit(1);
   }
@@ -596,7 +592,9 @@ async function handleImplement(
     exitWithError(`No workflow lineage found for ${parentIssue}`);
   }
 
-  const concurrency = opts.concurrency ? Number.parseInt(opts.concurrency, 10) : Number.MAX_SAFE_INTEGER;
+  const concurrency = opts.concurrency
+    ? Number.parseInt(opts.concurrency, 10)
+    : Number.MAX_SAFE_INTEGER;
   if (!Number.isInteger(concurrency) || concurrency <= 0) {
     exitWithError("--concurrency must be a positive integer");
   }
@@ -604,7 +602,8 @@ async function handleImplement(
   const sessionManager = await getSessionManager(config);
   const sessions = await sessionManager.list(projectId);
   let activeImplementers = sessions.filter(
-    (session) => session.metadata["role"] === workflow.childIssueRole && !isTerminalSession(session),
+    (session) =>
+      session.metadata["role"] === workflow.childIssueRole && !isTerminalSession(session),
   ).length;
 
   const pluginContext = await loadPluginContext(projectId, { requireTracker: true });
@@ -665,7 +664,7 @@ async function resolveReviewMatch(
     exitWithError(`No workflow child issue found for ${reference}`);
   }
 
-  const resolvedTaskPlan = resolveTaskPlanForReview(context.project, match.lineage);
+  const resolvedTaskPlan = resolveTaskPlanForReview(projectId, context.project, match.lineage);
   return {
     context,
     match,
@@ -731,14 +730,18 @@ async function handleReviewOutcome(
   reference: string,
   opts: { outcome: ReviewOutcome; summary: string; followUpTitle?: string },
 ): Promise<void> {
-  const { context, match, taskPlan, taskPlanPath } =
-    await resolveReviewMatch(projectId, reference);
+  const { context, match, taskPlan, taskPlanPath } = await resolveReviewMatch(projectId, reference);
   const child = match.lineage.childIssues[match.childIndex];
   const { config, workflow, tracker, scm, project } = context;
   const sessionManager = await getSessionManager(config);
 
   if (opts.outcome === "approve") {
-    await publishOutcomeToSCMOrTracker({ config, projectId, project, workflow, tracker, scm }, child, "approve", opts.summary);
+    await publishOutcomeToSCMOrTracker(
+      { config, projectId, project, workflow, tracker, scm },
+      child,
+      "approve",
+      opts.summary,
+    );
     transitionTaskLineageChildState(project.path, child.issueLabel, "approved");
     return;
   }
@@ -835,18 +838,11 @@ async function handleReviewOutcome(
     const updatedChildren = lineage.childIssues.map((entry: any, index: number) =>
       index === match.childIndex ? { ...entry, state: "blocked" as const } : entry,
     );
-    const merged = mergeTaskLineageChildIssues(
-      { ...lineage, childIssues: updatedChildren },
-      [
-        buildLineageChildIssue(
-          nextTaskIndex,
-          opts.followUpTitle,
-          createdIssue,
-          issueLabel,
-          [child.title],
-        ),
-      ],
-    );
+    const merged = mergeTaskLineageChildIssues({ ...lineage, childIssues: updatedChildren }, [
+      buildLineageChildIssue(nextTaskIndex, opts.followUpTitle, createdIssue, issueLabel, [
+        child.title,
+      ]),
+    ]);
     writeLineageYaml(lineagePath, merged);
   }
 }
@@ -900,7 +896,9 @@ function withCommandErrors<T extends (...args: any[]) => Promise<void>>(
 }
 
 export function registerWorkflow(program: Command): void {
-  const workflow = program.command("workflow").description("Workflow planning and lineage management");
+  const workflow = program
+    .command("workflow")
+    .description("Workflow planning and lineage management");
 
   workflow
     .command("plan")
@@ -939,7 +937,11 @@ export function registerWorkflow(program: Command): void {
     .command("lineage")
     .argument("<project>", "Project ID from config")
     .argument("<parentIssue>", "Parent issue identifier")
-    .action(withCommandErrors(async (projectId: string, parentIssue: string) => handleLineage(projectId, parentIssue)));
+    .action(
+      withCommandErrors(async (projectId: string, parentIssue: string) =>
+        handleLineage(projectId, parentIssue),
+      ),
+    );
 
   workflow
     .command("audit-lineage")
@@ -949,10 +951,8 @@ export function registerWorkflow(program: Command): void {
     .option("--repair", "Apply deterministic repairs in place")
     .action(
       withCommandErrors(
-        async (
-          projectId: string,
-          opts: { lineage: string; taskPlan?: string; repair?: boolean },
-        ) => handleAuditLineage(projectId, opts),
+        async (projectId: string, opts: { lineage: string; taskPlan?: string; repair?: boolean }) =>
+          handleAuditLineage(projectId, opts),
       ),
     );
 
@@ -963,11 +963,8 @@ export function registerWorkflow(program: Command): void {
     .option("--concurrency <n>", "Maximum concurrent implementation sessions")
     .action(
       withCommandErrors(
-        async (
-          projectId: string,
-          parentIssue: string,
-          opts: { concurrency?: string },
-        ) => handleImplement(projectId, parentIssue, opts),
+        async (projectId: string, parentIssue: string, opts: { concurrency?: string }) =>
+          handleImplement(projectId, parentIssue, opts),
       ),
     );
 
@@ -975,13 +972,20 @@ export function registerWorkflow(program: Command): void {
     .command("review")
     .argument("<project>", "Project ID from config")
     .argument("<reference>", "Child issue ref or PR ref")
-    .action(withCommandErrors(async (projectId: string, reference: string) => handleReview(projectId, reference)));
+    .action(
+      withCommandErrors(async (projectId: string, reference: string) =>
+        handleReview(projectId, reference),
+      ),
+    );
 
   workflow
     .command("review-outcome")
     .argument("<project>", "Project ID from config")
     .argument("<reference>", "Child issue ref or PR ref")
-    .requiredOption("--outcome <outcome>", "approve | request_changes | create_follow_up | update_parent_summary")
+    .requiredOption(
+      "--outcome <outcome>",
+      "approve | request_changes | create_follow_up | update_parent_summary",
+    )
     .requiredOption("--summary <summary>", "Structured summary of the review decision")
     .option("--follow-up-title <title>", "Title for the created follow-up issue")
     .action(
@@ -1000,9 +1004,8 @@ export function registerWorkflow(program: Command): void {
     .argument("<childRef>", "Child issue reference")
     .argument("<state>", `One of: ${TASK_LINEAGE_STATES_TEXT}`)
     .action(
-      withCommandErrors(
-        async (projectId: string, childRef: string, nextState: string) =>
-          handleSetState(projectId, childRef, nextState),
+      withCommandErrors(async (projectId: string, childRef: string, nextState: string) =>
+        handleSetState(projectId, childRef, nextState),
       ),
     );
 
@@ -1012,9 +1015,8 @@ export function registerWorkflow(program: Command): void {
     .argument("<parentIssue>", "Parent issue identifier")
     .argument("<path>", "New task-plan path")
     .action(
-      withCommandErrors(
-        async (projectId: string, parentIssue: string, nextTaskPlanPath: string) =>
-          handleRelocateTaskPlan(projectId, parentIssue, nextTaskPlanPath),
+      withCommandErrors(async (projectId: string, parentIssue: string, nextTaskPlanPath: string) =>
+        handleRelocateTaskPlan(projectId, parentIssue, nextTaskPlanPath),
       ),
     );
 }
