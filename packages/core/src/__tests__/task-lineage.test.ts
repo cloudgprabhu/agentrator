@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { TaskLineageNode } from "../task-lineage.js";
 import {
+  type TaskLineageNode,
   validateLineage,
   repairLineage,
   detectAmbiguousRelocation,

@@ -1,7 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import {
-  loadConfig,
   type TaskLineageNode,
   validateLineage,
   repairLineage,
@@ -19,7 +18,6 @@ export function registerWorkflow(program: Command): void {
     .option("--fix", "Apply repairs (default: dry run)")
     .option("--strict", "Fail on warnings")
     .action(async (file: string, opts: { fix?: boolean; strict?: boolean }) => {
-      const config = loadConfig();
       console.log(chalk.bold("\nTask Lineage Audit"));
       console.log(chalk.dim(`File: ${file}`));
       console.log(chalk.dim(`Mode: ${opts.fix ? "REPAIR" : "DRY RUN"}\n`));
