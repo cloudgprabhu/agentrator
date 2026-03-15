@@ -6,6 +6,7 @@ declare module "@composio/ao-plugin-agent-*" {
 }
 
 declare module "@composio/ao-plugin-scm-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { PluginModule, SCM } from "@composio/ao-core";
 
   const plugin: PluginModule<SCM>;

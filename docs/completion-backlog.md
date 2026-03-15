@@ -31,40 +31,23 @@ Those items covered:
 - auth JSON output, live validation, and browser adapter compatibility coverage
 - prompt policy provenance, SSE enrichment, shared webhook dedupe, native GitHub review publishing, provider-model data expansion, and prompt dedupe/normalization
 
+## Completed follow-up backlog
+
+These follow-up items have been implemented and merged:
+
+- **F01** Improve ambiguous legacy migration diagnostics — PR [#1](https://github.com/cloudgprabhu/agentrator/pull/1)
+- **F02** Parallelize auth profile status checks — PR [#2](https://github.com/cloudgprabhu/agentrator/pull/2)
+- **F04** Expand native tracker hierarchy only where justified — PR [#4](https://github.com/cloudgprabhu/agentrator/pull/4) (evaluated; maintain cross-platform lineage system)
+- **F05** Keep lineage repair scope safe while exploring stronger recovery — PR [#3](https://github.com/cloudgprabhu/agentrator/pull/3)
+
 ## Remaining follow-up backlog
 
-These are the still-open items that remain after `B01-B16`.
-
-### F01. Improve ambiguous legacy migration diagnostics
-
-Priority: `P0`
-
-Scope:
-
-- keep the migration guide current for ambiguous legacy installs
-- consider stronger diagnostics or a guided cleanup flow for shared-path session metadata that AO cannot safely infer
-- preserve the current safety rule that ambiguous files are skipped instead of guessed
-
-Definition of done:
-
-- operators have a clearer supported path when legacy shared-path metadata cannot be migrated automatically
-
-### F02. Parallelize auth profile status checks
-
-Priority: `P1`
-
-Scope:
-
-- reduce operator wait time when many auth profiles are configured
-- parallelize or batch `ao auth status` profile health checks without weakening error reporting clarity
-
-Definition of done:
-
-- auth inspection latency scales better with profile count while preserving existing status output and warnings
+These items remain open after `B01-B16` and `F01/F02/F04/F05`.
 
 ### F03. Keep explicit provider-model catalogs current
 
 Priority: `P1`
+Tracking: [#7](https://github.com/cloudgprabhu/agentrator/issues/7)
 
 Scope:
 
@@ -75,35 +58,10 @@ Definition of done:
 
 - newly supported model IDs no longer depend on ad hoc heuristic fixes
 
-### F04. Expand native tracker hierarchy only where justified
-
-Priority: `P2`
-
-Scope:
-
-- evaluate whether GitHub, GitLab, or future trackers justify native parent/child issue linkage
-- keep lineage artifacts and issue-body linkage as the cross-platform baseline
-
-Definition of done:
-
-- additional tracker-native hierarchy is added only where the platform support and operator value justify the maintenance cost
-
-### F05. Keep lineage repair scope safe while exploring stronger recovery
-
-Priority: `P1`
-
-Scope:
-
-- keep ambiguous task-plan relocation explicit instead of guessed
-- only broaden repair behavior if there is a safe way to reconstruct missing lineage references from tracker state
-
-Definition of done:
-
-- lineage repair remains conservative by default, with any broader recovery backed by deterministic reconstruction rules
-
 ### F06. Externalize webhook idempotency if deployments outgrow shared project storage
 
 Priority: `P2`
+Tracking: [#8](https://github.com/cloudgprabhu/agentrator/issues/8)
 
 Scope:
 
@@ -116,6 +74,7 @@ Definition of done:
 ### F07. Expand native SCM review publishing where worth it
 
 Priority: `P2`
+Tracking: [#9](https://github.com/cloudgprabhu/agentrator/issues/9)
 
 Scope:
 
@@ -128,21 +87,17 @@ Definition of done:
 
 ## Suggested execution order
 
-### Phase 1
+### Phase 1 — COMPLETE
 
-- `F01` Improve ambiguous legacy migration diagnostics
-- `F02` Parallelize auth profile status checks
-- `F05` Keep lineage repair scope safe while exploring stronger recovery
-
-Exit gate:
-
-- the remaining safety and operator-friction gaps are reduced without weakening current conservative behavior
+- ~~`F01` Improve ambiguous legacy migration diagnostics~~ — merged via PR #1
+- ~~`F02` Parallelize auth profile status checks~~ — merged via PR #2
+- ~~`F05` Keep lineage repair scope safe while exploring stronger recovery~~ — merged via PR #3
 
 ### Phase 2
 
-- `F03` Keep explicit provider-model catalogs current
-- `F04` Expand native tracker hierarchy only where justified
-- `F07` Expand native SCM review publishing where worth it
+- `F03` Keep explicit provider-model catalogs current — [#7](https://github.com/cloudgprabhu/agentrator/issues/7)
+- ~~`F04` Expand native tracker hierarchy only where justified~~ — merged via PR #4
+- `F07` Expand native SCM review publishing where worth it — [#9](https://github.com/cloudgprabhu/agentrator/issues/9)
 
 Exit gate:
 
@@ -150,7 +105,7 @@ Exit gate:
 
 ### Phase 3
 
-- `F06` Externalize webhook idempotency if deployments outgrow shared project storage
+- `F06` Externalize webhook idempotency if deployments outgrow shared project storage — [#8](https://github.com/cloudgprabhu/agentrator/issues/8)
 
 Exit gate:
 
@@ -158,9 +113,9 @@ Exit gate:
 
 ## Recommended next task
 
-Implement `F01` first.
+Implement `F03` next.
 
 Reason:
 
-- it is the clearest remaining gap against the fork's migration-safety completion criteria
-- the current migration behavior is intentionally safe, but operators still need stronger diagnostics or guided cleanup when AO cannot infer ambiguous legacy metadata automatically
+- it is the highest-priority remaining item (P1)
+- keeping provider-model catalogs current prevents operators from depending on ad hoc heuristic fixes for newly supported models

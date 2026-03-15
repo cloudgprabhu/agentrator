@@ -13,9 +13,7 @@ import {
   readMetadataRaw,
   taskPlanToYaml,
   type CICheck,
-  type OrchestratorConfig,
   type PRInfo,
-  type ProjectConfig,
   type Review,
   type ReviewComment,
   type SCM,
@@ -287,6 +285,7 @@ describe("fork workflow deterministic integration", () => {
       taskPlanPath: "docs/plans/int-42.task-plan.yaml",
       trackerPlugin: "fake-tracker",
       createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
       planningSession: null,
       childIssues: [
         {

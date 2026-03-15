@@ -143,6 +143,7 @@ describe("openai codex browser auth adapter", () => {
         return { success: true, stdout: "Logged in using ChatGPT", stderr: "" };
       },
       platform: "darwin",
+      isCi: false,
     });
 
     const status = await adapter.login!(makeContext());
@@ -188,6 +189,7 @@ describe("openai codex browser auth adapter", () => {
         stderr: "fatal: token sk-secret-value invalid",
       }),
       platform: "darwin",
+      isCi: false,
     });
 
     const status = await adapter.login!(makeContext());

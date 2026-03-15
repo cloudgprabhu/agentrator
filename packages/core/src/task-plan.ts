@@ -75,7 +75,7 @@ export function validateTaskPlan(
     return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {
-      throw new Error(`Invalid task plan in ${source}: ${formatZodError(error)}`);
+      throw new Error(`Invalid task plan in ${source}: ${formatZodError(error)}`, { cause: error });
     }
     throw error;
   }
@@ -91,7 +91,7 @@ export function parseTaskPlan(
     parsed = parseYaml(content);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to parse task plan YAML in ${source}: ${message}`);
+    throw new Error(`Failed to parse task plan YAML in ${source}: ${message}`, { cause: error });
   }
 
   return validateTaskPlan(parsed, source, options);

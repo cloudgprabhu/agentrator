@@ -831,7 +831,8 @@ async function handleReviewOutcome(
 
     const lineagePath = match.filePath;
     const lineage = readTaskLineageFile(lineagePath);
-    const updatedChildren = lineage.childIssues.map((entry, index) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updatedChildren = lineage.childIssues.map((entry: any, index: number) =>
       index === match.childIndex ? { ...entry, state: "blocked" as const } : entry,
     );
     const merged = mergeTaskLineageChildIssues(
@@ -883,10 +884,11 @@ async function handleRelocateTaskPlan(
   console.log(`${before.lineage.taskPlanPath} -> ${nextTaskPlanPath}`);
 }
 
-function withCommandErrors(
-  handler: (...args: unknown[]) => Promise<void>,
-): (...args: unknown[]) => Promise<void> {
-  return async (...args: unknown[]) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function withCommandErrors<T extends (...args: any[]) => Promise<void>>(
+  handler: T,
+): (...args: Parameters<T>) => Promise<void> {
+  return async (...args: Parameters<T>) => {
     try {
       await handler(...args);
     } catch (error) {

@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
+    "ao": "dist/index.js",
     "aom": "dist/index.js"
   },
   "main": "dist/index.js",

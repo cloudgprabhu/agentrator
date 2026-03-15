@@ -6,6 +6,7 @@ declare module "@composio/ao-plugin-agent-*" {
 }
 
 declare module "@composio/ao-plugin-runtime-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { PluginModule, Runtime } from "@composio/ao-core";
 
   const plugin: PluginModule<Runtime>;
@@ -13,6 +14,7 @@ declare module "@composio/ao-plugin-runtime-*" {
 }
 
 declare module "@composio/ao-plugin-workspace-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { PluginModule, Workspace } from "@composio/ao-core";
 
   const plugin: PluginModule<Workspace>;
@@ -20,6 +22,7 @@ declare module "@composio/ao-plugin-workspace-*" {
 }
 
 declare module "@composio/ao-plugin-tracker-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { PluginModule, Tracker } from "@composio/ao-core";
 
   const plugin: PluginModule<Tracker>;
@@ -27,6 +30,7 @@ declare module "@composio/ao-plugin-tracker-*" {
 }
 
 declare module "@composio/ao-plugin-notifier-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { Notifier, PluginModule } from "@composio/ao-core";
 
   const plugin: PluginModule<Notifier>;
@@ -34,6 +38,7 @@ declare module "@composio/ao-plugin-notifier-*" {
 }
 
 declare module "@composio/ao-plugin-terminal-*" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { PluginModule, Terminal } from "@composio/ao-core";
 
   const plugin: PluginModule<Terminal>;
@@ -41,6 +46,7 @@ declare module "@composio/ao-plugin-terminal-*" {
 }
 
 declare module "@composio/ao-plugin-agent-claude-code" {
+  // eslint-disable-next-line no-duplicate-imports -- separate ambient module declaration requires its own import
   import type { Agent, PluginModule } from "@composio/ao-core";
 
   const plugin: PluginModule<Agent>;

@@ -146,7 +146,7 @@ echo ""
 if command -v ao &> /dev/null; then
   echo "[ok] 'ao' command is available in PATH"
 else
-  NPM_BIN="$(npm bin -g 2>/dev/null || npm config get prefix)/bin"
+  NPM_BIN="$(npm prefix --global 2>/dev/null)/bin"
   echo "WARNING: 'ao' is not in your PATH."
   echo "  Add this to your shell profile (~/.zshrc or ~/.bashrc):"
   echo ""

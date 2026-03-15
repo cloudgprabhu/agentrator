@@ -135,7 +135,7 @@ describe.skipIf(!tmuxOk)("CLI-Core integration (hash-based architecture)", () =>
   });
 
   it("core session-manager finds session in hash-based directory", async () => {
-    const sessionsDir = getSessionsDir(configPath, repoPath);
+    const sessionsDir = getSessionsDir(configPath, "test-project");
     mkdirSync(sessionsDir, { recursive: true });
 
     // Write metadata

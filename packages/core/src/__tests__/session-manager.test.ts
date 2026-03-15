@@ -1013,7 +1013,7 @@ describe("spawn", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
-          'if [[ \"$1\" == \"login\" && \"$2\" == \"status\" ]]; then',
+          'if [[ "$1" == "login" && "$2" == "status" ]]; then',
           "  printf 'login required\\n'",
           "  exit 0",
           "fi",
