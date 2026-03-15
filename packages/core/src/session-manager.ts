@@ -1557,7 +1557,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function list(projectId?: string): Promise<Session[]> {
-    const allSessions = Object.entries(config.projects).flatMap(([entryProjectId, project]) => {
+    const allSessions = Object.entries(config.projects).flatMap(([entryProjectId, _project]) => {
       if (projectId && entryProjectId !== projectId) return [];
       return loadActiveSessionRecords(entryProjectId).map((record) => ({
         sessionName: record.sessionName,

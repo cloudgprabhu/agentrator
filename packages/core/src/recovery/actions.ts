@@ -38,7 +38,7 @@ export async function recoverSession(
     const now = new Date().toISOString();
     const preservedStatus = validateStatus(rawMetadata["status"]);
 
-    const project = config.projects[projectId];
+    const _project = config.projects[projectId];
     const sessionsDir = getSessionsDir(config.configPath, projectId);
 
     if (recoveryCount > context.recoveryConfig.maxRecoveryAttempts) {
@@ -178,7 +178,7 @@ export async function escalateSession(
   }
 
   try {
-    const project = config.projects[projectId];
+    const _project = config.projects[projectId];
     const sessionsDir = getSessionsDir(config.configPath, projectId);
 
     updateMetadata(sessionsDir, sessionId, {
