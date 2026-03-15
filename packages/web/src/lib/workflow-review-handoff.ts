@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   TERMINAL_STATUSES,
   findTaskLineageByPREvent,
@@ -10,11 +10,12 @@ import {
   type SCMWebhookEvent,
   type Session,
   type SessionManager,
+  type SCMWebhookReviewerHandoffStoreConfig,
   type Tracker,
 } from "@composio/ao-core";
 
 const HANDOFF_TTL_MS = 10 * 60_000;
-const HANDOFF_STORE_DIR = join(".ao", "webhook-review-handoffs");
+const PROJECT_LOCAL_HANDOFF_STORE_DIR = join(".ao", "webhook-review-handoffs");
 
 export interface WorkflowReviewHandoffResult {
   spawnedSessionId?: string;
@@ -27,13 +28,13 @@ function resolveProjectFilePath(projectPath: string, filePath: string): string {
   return isAbsolute(filePath) ? filePath : join(projectPath, filePath);
 }
 
-function getHandoffStorePath(projectPath: string): string {
-  return join(projectPath, HANDOFF_STORE_DIR);
+function getProjectLocalHandoffStorePath(projectPath: string): string {
+  return join(projectPath, PROJECT_LOCAL_HANDOFF_STORE_DIR);
 }
 
-function getHandoffClaimFilePath(projectPath: string, handoffKey: string): string {
+function getHandoffClaimFilePath(storePath: string, handoffKey: string): string {
   const digest = createHash("sha1").update(handoffKey).digest("hex");
-  return join(getHandoffStorePath(projectPath), `${digest}.json`);
+  return join(storePath, `${digest}.json`);
 }
 
 function readHandoffClaim(filePath: string): { key: string; claimedAt: number } | null {
@@ -56,8 +57,7 @@ function isExpiredClaim(claim: { claimedAt: number } | null, now = Date.now()): 
   return now - claim.claimedAt > HANDOFF_TTL_MS;
 }
 
-function prunePersistedHandoffs(projectPath: string, now = Date.now()): void {
-  const storePath = getHandoffStorePath(projectPath);
+function prunePersistedHandoffs(storePath: string, now = Date.now()): void {
   try {
     for (const entry of readdirSync(storePath)) {
       if (!entry.endsWith(".json")) continue;
@@ -72,21 +72,69 @@ function prunePersistedHandoffs(projectPath: string, now = Date.now()): void {
   }
 }
 
-function claimWorkflowHandoff(projectPath: string, handoffKey: string): { duplicate: boolean; filePath: string } {
-  const storePath = getHandoffStorePath(projectPath);
-  const filePath = getHandoffClaimFilePath(projectPath, handoffKey);
+function resolveSharedHandoffStoreBasePath(
+  config: OrchestratorConfig,
+  storeConfig: SCMWebhookReviewerHandoffStoreConfig,
+): string {
+  const envPath = storeConfig.pathEnvVar ? process.env[storeConfig.pathEnvVar]?.trim() : undefined;
+  const configuredPath = envPath || storeConfig.path;
+  if (!configuredPath) {
+    const source = storeConfig.pathEnvVar
+      ? `env ${storeConfig.pathEnvVar}`
+      : "scm.webhook.reviewerHandoffStore.path";
+    throw new Error(`Shared reviewer handoff store is enabled but ${source} is not set`);
+  }
+
+  return isAbsolute(configuredPath)
+    ? configuredPath
+    : resolve(dirname(config.configPath), configuredPath);
+}
+
+function buildHandoffStoreNamespace(
+  projectId: string,
+  project: ProjectConfig,
+  storeConfig: SCMWebhookReviewerHandoffStoreConfig,
+): string {
+  const namespaceSource = storeConfig.keyPrefix?.trim() || project.repo || projectId;
+  const digest = createHash("sha1").update([namespaceSource, projectId].join(":")).digest("hex");
+  return digest.slice(0, 24);
+}
+
+function getHandoffStorePath(
+  config: OrchestratorConfig,
+  projectId: string,
+  project: ProjectConfig,
+): string {
+  const storeConfig = project.scm?.webhook?.reviewerHandoffStore;
+  if (!storeConfig || storeConfig.provider === "project-local-filesystem") {
+    return getProjectLocalHandoffStorePath(project.path);
+  }
+
+  return join(
+    resolveSharedHandoffStoreBasePath(config, storeConfig),
+    buildHandoffStoreNamespace(projectId, project, storeConfig),
+  );
+}
+
+function claimWorkflowHandoff(
+  config: OrchestratorConfig,
+  projectId: string,
+  project: ProjectConfig,
+  handoffKey: string,
+): { duplicate: boolean; filePath: string } {
+  const storePath = getHandoffStorePath(config, projectId, project);
+  const filePath = getHandoffClaimFilePath(storePath, handoffKey);
 
   mkdirSync(storePath, { recursive: true });
-  prunePersistedHandoffs(projectPath);
+  prunePersistedHandoffs(storePath);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const now = Date.now();
     try {
-      writeFileSync(
-        filePath,
-        JSON.stringify({ key: handoffKey, claimedAt: now }),
-        { encoding: "utf-8", flag: "wx" },
-      );
+      writeFileSync(filePath, JSON.stringify({ key: handoffKey, claimedAt: now }), {
+        encoding: "utf-8",
+        flag: "wx",
+      });
       return { duplicate: false, filePath };
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
@@ -120,12 +168,7 @@ function buildHandoffKey(projectId: string, event: SCMWebhookEvent): string | nu
     : event.deliveryId
       ? `delivery:${event.deliveryId}`
       : `branch:${event.branch ?? "no-ref"}`;
-  return [
-    projectId,
-    event.action,
-    prRef,
-    burstRef,
-  ].join(":");
+  return [projectId, event.action, prRef, burstRef].join(":");
 }
 
 function hasActiveReviewerSession(
@@ -220,7 +263,9 @@ function buildReviewerPrompt(
 
   lines.push("");
   lines.push("## Review Instructions");
-  lines.push("- Review the implementation against the acceptance criteria and linked design artifacts.");
+  lines.push(
+    "- Review the implementation against the acceptance criteria and linked design artifacts.",
+  );
   lines.push("- Inspect the PR diff when available and call out concrete defects first.");
   lines.push("- End with one explicit outcome: approved, changes_requested, blocked, or done.");
   return lines.join("\n");
@@ -274,8 +319,9 @@ export async function maybeAutoSpawnWorkflowReviewer(opts: {
     };
   }
 
-  const handoffClaim =
-    handoffKey ? claimWorkflowHandoff(project.path, handoffKey) : null;
+  const handoffClaim = handoffKey
+    ? claimWorkflowHandoff(config, projectId, project, handoffKey)
+    : null;
   if (handoffClaim?.duplicate) {
     return {
       skippedReason: "duplicate_delivery",
@@ -284,7 +330,9 @@ export async function maybeAutoSpawnWorkflowReviewer(opts: {
     };
   }
 
-  const taskPlan = readTaskPlanFile(resolveProjectFilePath(project.path, match.lineage.taskPlanPath));
+  const taskPlan = readTaskPlanFile(
+    resolveProjectFilePath(project.path, match.lineage.taskPlanPath),
+  );
   const childTask = taskPlan.childTasks[child.taskIndex];
   if (!childTask) {
     releaseWorkflowHandoffClaim(handoffClaim?.filePath);

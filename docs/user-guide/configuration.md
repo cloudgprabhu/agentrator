@@ -132,6 +132,37 @@ Both `modelProfiles` and `roles` can set:
 
 These are merged into the final prompt used by the selected agent.
 
+## Webhook reviewer handoff storage
+
+Reviewer handoff dedupe defaults to claim files under each project's local `.ao/` state directory.
+Keep that default when all web instances already share the same project-local storage.
+
+If you deploy multiple web instances that do not share project-local state, move reviewer handoff
+claims to a shared filesystem path:
+
+```yaml
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/src/my-app
+    defaultBranch: main
+    scm:
+      plugin: github
+      webhook:
+        path: /api/webhooks/github
+        secretEnvVar: GITHUB_WEBHOOK_SECRET
+        reviewerHandoffStore:
+          provider: shared-filesystem
+          pathEnvVar: AO_SHARED_REVIEW_HANDOFF_DIR
+          keyPrefix: prod-web
+```
+
+Notes:
+
+- `provider: shared-filesystem` requires either `path` or `pathEnvVar`
+- relative `path` values resolve from the directory containing `agent-orchestrator.yaml`
+- `keyPrefix` is optional and helps isolate multiple deployments sharing the same backing path
+
 ## Migration from upstream config
 
 Use the migration helper first:

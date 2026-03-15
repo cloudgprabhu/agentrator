@@ -395,6 +395,56 @@ describe("Config Validation - SCM webhook contract", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts a shared reviewer handoff store for multi-instance web deployments", () => {
+    const config = validateConfig({
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+          scm: {
+            plugin: "github",
+            webhook: {
+              reviewerHandoffStore: {
+                provider: "shared-filesystem",
+                pathEnvVar: "AO_SHARED_REVIEW_HANDOFF_DIR",
+                keyPrefix: "prod-web",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(config.projects["proj1"]?.scm?.webhook?.reviewerHandoffStore).toEqual({
+      provider: "shared-filesystem",
+      pathEnvVar: "AO_SHARED_REVIEW_HANDOFF_DIR",
+      keyPrefix: "prod-web",
+    });
+  });
+
+  it("rejects shared reviewer handoff stores without a path source", () => {
+    expect(() =>
+      validateConfig({
+        projects: {
+          proj1: {
+            path: "/repos/test",
+            repo: "org/test",
+            defaultBranch: "main",
+            scm: {
+              plugin: "github",
+              webhook: {
+                reviewerHandoffStore: {
+                  provider: "shared-filesystem",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(/reviewerHandoffStore shared-filesystem provider requires path or pathEnvVar/);
+  });
 });
 
 describe("Config Schema Validation", () => {

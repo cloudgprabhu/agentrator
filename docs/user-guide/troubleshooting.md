@@ -92,7 +92,11 @@ The lineage file stores a path to the task-plan artifact. If that file was moved
 
 ### Duplicate reviewer sessions were still created
 
-Same-process PR-burst dedupe is in place, but multi-process or multi-instance web deployments still need a shared idempotency store. This remains an open follow-up in `open-risk.md`.
+Check the reviewer handoff store topology:
+
+- if web instances share each project's local `.ao/` state directory, keep the default config
+- if they do not, set `scm.webhook.reviewerHandoffStore.provider: shared-filesystem` and point it
+  at a path shared by all web instances
 
 ### Lineage merge fails with parent/task-plan mismatch
 

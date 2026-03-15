@@ -586,10 +586,7 @@ export interface SCM {
   getAutomatedComments(pr: PRInfo): Promise<AutomatedComment[]>;
 
   /** Publish a review outcome to the SCM-native PR/MR review surface, if supported. */
-  publishReview?(
-    pr: PRInfo,
-    review: SCMReviewSubmission,
-  ): Promise<void>;
+  publishReview?(pr: PRInfo, review: SCMReviewSubmission): Promise<void>;
 
   // --- Merge Readiness ---
 
@@ -1224,6 +1221,24 @@ export interface SCMConfig {
   [key: string]: unknown;
 }
 
+export type SCMWebhookReviewerHandoffStoreProvider =
+  | "project-local-filesystem"
+  | "shared-filesystem";
+
+export interface SCMWebhookReviewerHandoffStoreConfig {
+  /**
+   * Default: store dedupe claims under the project's local `.ao` state dir.
+   * Use `shared-filesystem` only when web instances no longer share that state.
+   */
+  provider?: SCMWebhookReviewerHandoffStoreProvider;
+  /** Shared store path, absolute or relative to the config file directory. */
+  path?: string;
+  /** Env var containing the shared store path. Takes precedence over `path`. */
+  pathEnvVar?: string;
+  /** Optional namespace override for multi-deployment shared stores. */
+  keyPrefix?: string;
+}
+
 export interface SCMWebhookConfig {
   enabled?: boolean;
   path?: string;
@@ -1232,6 +1247,7 @@ export interface SCMWebhookConfig {
   eventHeader?: string;
   deliveryHeader?: string;
   maxBodyBytes?: number;
+  reviewerHandoffStore?: SCMWebhookReviewerHandoffStoreConfig;
 }
 
 export interface NotifierConfig {

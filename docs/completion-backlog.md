@@ -33,16 +33,17 @@ Those items covered:
 
 ## Completed follow-up backlog
 
-These follow-up items have been implemented and merged:
+These follow-up items have been implemented:
 
 - **F01** Improve ambiguous legacy migration diagnostics — PR [#1](https://github.com/cloudgprabhu/agentrator/pull/1)
 - **F02** Parallelize auth profile status checks — PR [#2](https://github.com/cloudgprabhu/agentrator/pull/2)
 - **F04** Expand native tracker hierarchy only where justified — PR [#4](https://github.com/cloudgprabhu/agentrator/pull/4) (evaluated; maintain cross-platform lineage system)
 - **F05** Keep lineage repair scope safe while exploring stronger recovery — PR [#3](https://github.com/cloudgprabhu/agentrator/pull/3)
+- **F06** Externalize reviewer-handoff idempotency when deployments do not share project-local storage
 
 ## Remaining follow-up backlog
 
-These items remain open after `B01-B16` and `F01/F02/F04/F05`.
+These items remain open after `B01-B16` and `F01/F02/F04/F05/F06`.
 
 ### F03. Keep explicit provider-model catalogs current
 
@@ -57,19 +58,6 @@ Scope:
 Definition of done:
 
 - newly supported model IDs no longer depend on ad hoc heuristic fixes
-
-### F06. Externalize webhook idempotency if deployments outgrow shared project storage
-
-Priority: `P2`
-Tracking: [#8](https://github.com/cloudgprabhu/agentrator/issues/8)
-
-Scope:
-
-- move reviewer-handoff dedupe from project-local filesystem claims to an external shared store only if deployment topology no longer shares project-local storage
-
-Definition of done:
-
-- duplicate PR webhook deliveries remain suppressed across the actual deployment topology in use
 
 ### F07. Expand native SCM review publishing where worth it
 
@@ -105,7 +93,7 @@ Exit gate:
 
 ### Phase 3
 
-- `F06` Externalize webhook idempotency if deployments outgrow shared project storage — [#8](https://github.com/cloudgprabhu/agentrator/issues/8)
+- ~~`F06` Externalize webhook idempotency if deployments outgrow shared project storage~~
 
 Exit gate:
 
