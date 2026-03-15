@@ -45,6 +45,7 @@ let mockRegistry: PluginRegistry;
 let config: OrchestratorConfig;
 let originalPath: string | undefined;
 let originalHome: string | undefined;
+let originalOpenAIApiKey: string | undefined;
 
 function makeHandle(id: string): RuntimeHandle {
   return { id, runtimeName: "mock", data: {} };
@@ -138,9 +139,11 @@ function installMockGit(remoteBranches: string[]): string {
 beforeEach(() => {
   originalPath = process.env.PATH;
   originalHome = process.env.HOME;
+  originalOpenAIApiKey = process.env.OPENAI_API_KEY;
   tmpDir = join(tmpdir(), `ao-test-session-mgr-${randomUUID()}`);
   mkdirSync(tmpDir, { recursive: true });
   process.env.HOME = tmpDir;
+  process.env.OPENAI_API_KEY = "test-openai-key";
 
   // Create a temporary config file
   configPath = join(tmpDir, "agent-orchestrator.yaml");
@@ -230,6 +233,7 @@ beforeEach(() => {
 afterEach(() => {
   process.env.PATH = originalPath;
   process.env.HOME = originalHome;
+  process.env.OPENAI_API_KEY = originalOpenAIApiKey;
   // Clean up hash-based directories in ~/.agent-orchestrator
   const projectBaseDir = getProjectBaseDir(configPath, "my-app");
   if (existsSync(projectBaseDir)) {
@@ -997,6 +1001,70 @@ describe("spawn", () => {
       await expect(
         sm.spawn({ projectId: "my-app", issueId: "INT-123", role: "planner" }),
       ).rejects.toThrow("Resolved auth profile 'codexBrowser' for project 'my-app' role 'planner' is unavailable");
+      expect(mockRuntime.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks spawn when the resolved auth profile is not authenticated", async () => {
+      const binDir = join(tmpDir, "codex-not-auth-bin");
+      mkdirSync(binDir, { recursive: true });
+      const codexPath = join(binDir, "codex");
+      writeFileSync(
+        codexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'if [[ \"$1\" == \"login\" && \"$2\" == \"status\" ]]; then',
+          "  printf 'login required\\n'",
+          "  exit 0",
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      chmodSync(codexPath, 0o755);
+      process.env.PATH = `${binDir}:/usr/bin:/bin`;
+
+      const configWithBrowserAuth: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: {
+            kind: "openai",
+            capabilities: { browserAuth: true },
+          },
+        },
+        authProfiles: {
+          codexBrowser: {
+            type: "browser-account",
+            provider: "openai",
+            accountType: "chatgpt-plus",
+          },
+        },
+        modelProfiles: {
+          plannerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "codexBrowser",
+            model: "o3",
+          },
+        },
+        roles: {
+          planner: {
+            modelProfile: "plannerModel",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithBrowserAuth,
+        registry: registryWithMultipleAgents,
+      });
+
+      await expect(
+        sm.spawn({ projectId: "my-app", issueId: "INT-123", role: "planner" }),
+      ).rejects.toThrow(
+        "Resolved auth profile 'codexBrowser' for project 'my-app' role 'planner' is not authenticated",
+      );
       expect(mockRuntime.create).not.toHaveBeenCalled();
     });
 

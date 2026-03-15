@@ -132,15 +132,15 @@ describe("openai codex browser auth adapter", () => {
     expect(status.status).toBe("unsupported_environment");
   });
 
-  it("login delegates to codex auth login before re-checking status", async () => {
+  it("login delegates to codex login before re-checking status", async () => {
     const calls: string[][] = [];
     const adapter = createOpenAICodexBrowserAuthAdapter({
       runCodexCli: async (args) => {
         calls.push(args);
-        if (args[0] === "auth" && args[1] === "login") {
+        if (args[0] === "login" && args.length === 1) {
           return { success: true, stdout: "", stderr: "" };
         }
-        return { success: true, stdout: '{"authenticated":true}', stderr: "" };
+        return { success: true, stdout: "Logged in using ChatGPT", stderr: "" };
       },
       platform: "darwin",
     });
@@ -148,7 +148,34 @@ describe("openai codex browser auth adapter", () => {
     const status = await adapter.login!(makeContext());
     expect(status.status).toBe("authenticated");
     expect(calls).toEqual([
-      ["auth", "login"],
+      ["login"],
+      ["login", "status"],
+    ]);
+  });
+
+  it("falls back to legacy codex auth subcommands when the new login command shape is unsupported", async () => {
+    const calls: string[][] = [];
+    const adapter = createOpenAICodexBrowserAuthAdapter({
+      runCodexCli: async (args) => {
+        calls.push(args);
+        if (args[0] === "login" && args[1] === "status") {
+          return {
+            success: false,
+            stdout: "",
+            stderr: "error: unrecognized subcommand 'status'",
+          };
+        }
+        if (args[0] === "auth" && args[1] === "status") {
+          return { success: true, stdout: '{"authenticated":true}', stderr: "" };
+        }
+        return { success: false, stdout: "", stderr: "unexpected invocation" };
+      },
+    });
+
+    const status = await adapter.getStatus!(makeContext());
+    expect(status.status).toBe("authenticated");
+    expect(calls).toEqual([
+      ["login", "status"],
       ["auth", "status", "--json"],
     ]);
   });
@@ -170,7 +197,7 @@ describe("openai codex browser auth adapter", () => {
     });
   });
 
-  it("logout delegates to codex auth logout", async () => {
+  it("logout delegates to codex logout", async () => {
     const calls: string[][] = [];
     const adapter = createOpenAICodexBrowserAuthAdapter({
       runCodexCli: async (args) => {
@@ -181,7 +208,7 @@ describe("openai codex browser auth adapter", () => {
 
     const status = await adapter.logout!(makeContext());
     expect(status.status).toBe("not_authenticated");
-    expect(calls[0]).toEqual(["auth", "logout"]);
+    expect(calls[0]).toEqual(["logout"]);
   });
 
   it("returns safe status output when CLI failure text is opaque", async () => {

@@ -71,25 +71,6 @@ export function normalizeMetadataRecord(raw: Record<string, string>): Record<str
 }
 
 /** Validate sessionId to prevent path traversal. */
-/** Normalize a raw metadata record, aliasing projectId/project and issueId/issue. */
-export function normalizeMetadataRecord(raw: Record<string, string>): Record<string, string> {
-  const normalized = { ...raw };
-
-  const issueValue = normalized["issueId"] ?? normalized["issue"];
-  if (issueValue) {
-    normalized["issueId"] = issueValue;
-    normalized["issue"] = normalized["issue"] ?? issueValue;
-  }
-
-  const projectValue = normalized["projectId"] ?? normalized["project"];
-  if (projectValue) {
-    normalized["projectId"] = projectValue;
-    normalized["project"] = normalized["project"] ?? projectValue;
-  }
-
-  return normalized;
-}
-
 const VALID_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
 
 function validateSessionId(sessionId: SessionId): void {

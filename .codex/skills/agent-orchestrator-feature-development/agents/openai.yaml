@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Orchestrator Feature Dev"
+  short_description: "Repo-specific workflow for safe feature additions"
+  default_prompt: "Use $agent-orchestrator-feature-development to add or extend a feature in this repository while keeping docs, examples, and tests aligned."

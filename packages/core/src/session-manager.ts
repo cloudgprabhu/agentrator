@@ -916,6 +916,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (health.authStatus === "unsupported_environment") {
       throw new Error(`${prefix} is unsupported in this environment: ${health.message}`);
     }
+
+    if (health.authStatus === "not_authenticated") {
+      throw new Error(`${prefix} is not authenticated: ${health.message}`);
+    }
   }
 
   // Define methods as local functions so `this` is not needed
