@@ -10,7 +10,11 @@ import {
   type ActivityState,
   type Tracker,
   type ProjectConfig,
+  findTaskLineageByChildIssue,
+  findTaskLineageByParentIssue,
+  findTaskLineageBySession,
   loadConfig,
+  resolveModelRuntimeConfig,
 } from "@composio/ao-core";
 import { git, getTmuxSessions, getTmuxActivity } from "../lib/shell.js";
 import {
@@ -40,10 +44,80 @@ interface SessionInfo {
   reviewDecision: ReviewDecision | null;
   pendingThreads: number | null;
   activity: ActivityState | null;
+  role: string | null;
+  agent: string | null;
+  provider: string | null;
+  model: string | null;
+  authProfile: string | null;
+  authMode: string | null;
+  promptRulesFiles: string[];
+  promptPrefix: string | null;
+  promptGuardrails: string[];
+  workflowState: string | null;
+  workflowRelationship: string | null;
+}
+
+interface WorkflowContext {
+  workflowState: string | null;
+  workflowRelationship: string | null;
 }
 
 function isOrchestratorSession(session: Session): boolean {
   return session.metadata["role"] === "orchestrator" || session.id.endsWith("-orchestrator");
+}
+
+function parseMetadataStringArray(value: string | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    }
+    if (typeof parsed === "string" && parsed.length > 0) {
+      return [parsed];
+    }
+  } catch {
+    // Treat as a single string fallback.
+  }
+  return value.trim() ? [value.trim()] : [];
+}
+
+function resolvePromptPolicy(
+  session: Session,
+  selectedAgent: string | null,
+  config: ReturnType<typeof loadConfig>,
+): { rulesFiles: string[]; promptPrefix: string | null; guardrails: string[] } {
+  const metadataRulesFiles = parseMetadataStringArray(session.metadata["promptRulesFiles"]);
+  const metadataPromptPrefix = session.metadata["promptPrefix"] ?? null;
+  const metadataGuardrails = parseMetadataStringArray(session.metadata["promptGuardrails"]);
+  if (metadataRulesFiles.length > 0 || metadataPromptPrefix || metadataGuardrails.length > 0) {
+    return {
+      rulesFiles: metadataRulesFiles,
+      promptPrefix: metadataPromptPrefix,
+      guardrails: metadataGuardrails,
+    };
+  }
+
+  const roleKey = session.metadata["role"];
+  if (!selectedAgent || !roleKey || roleKey === "orchestrator") {
+    return { rulesFiles: [], promptPrefix: null, guardrails: [] };
+  }
+
+  try {
+    const resolved = resolveModelRuntimeConfig({
+      config,
+      projectId: session.projectId,
+      agent: selectedAgent,
+      roleKey,
+    });
+    return {
+      rulesFiles: resolved.promptSettings.rulesFiles ?? [],
+      promptPrefix: resolved.promptSettings.promptPrefix ?? null,
+      guardrails: resolved.promptSettings.guardrails ?? [],
+    };
+  } catch {
+    return { rulesFiles: [], promptPrefix: null, guardrails: [] };
+  }
 }
 
 async function gatherSessionInfo(
@@ -58,6 +132,15 @@ async function gatherSessionInfo(
   const summary = session.metadata["summary"] ?? null;
   const prUrl = suppressPROwnership ? null : (session.metadata["pr"] ?? null);
   const issue = session.issueId;
+  const role = session.metadata["role"] ?? null;
+  const project = projectConfig.projects[session.projectId];
+  const configuredAgent = project?.agent ?? projectConfig.defaults.agent ?? null;
+  const selectedAgent = session.metadata["agent"] ?? configuredAgent ?? null;
+  const provider = session.metadata["provider"] ?? null;
+  const model = session.metadata["model"] ?? null;
+  const authProfile = session.metadata["authProfile"] ?? null;
+  const authMode = session.metadata["authMode"] ?? null;
+  const promptPolicy = resolvePromptPolicy(session, selectedAgent, projectConfig);
 
   // Get live branch from worktree if available
   if (session.workspacePath) {
@@ -120,6 +203,8 @@ async function gatherSessionInfo(
     }
   }
 
+  const workflowContext = resolveWorkflowContext(session, project);
+
   return {
     name: session.id,
     branch,
@@ -135,7 +220,69 @@ async function gatherSessionInfo(
     reviewDecision,
     pendingThreads,
     activity,
+    role,
+    agent: selectedAgent,
+    provider,
+    model,
+    authProfile,
+    authMode,
+    promptRulesFiles: promptPolicy.rulesFiles,
+    promptPrefix: promptPolicy.promptPrefix,
+    promptGuardrails: promptPolicy.guardrails,
+    workflowState: workflowContext.workflowState,
+    workflowRelationship: workflowContext.workflowRelationship,
   };
+}
+
+function resolveWorkflowContext(
+  session: Session,
+  project: ProjectConfig | undefined,
+): WorkflowContext {
+  if (!project) {
+    return { workflowState: null, workflowRelationship: null };
+  }
+
+  const bySession = findTaskLineageBySession(project.path, session.id);
+  if (bySession) {
+    if (bySession.childIndex === null) {
+      return {
+        workflowState: "planning",
+        workflowRelationship: `parent ${bySession.lineage.parentIssue}`,
+      };
+    }
+    const child = bySession.lineage.childIssues[bySession.childIndex];
+    if (child) {
+      return {
+        workflowState: child.state,
+        workflowRelationship: `child of ${bySession.lineage.parentIssue}`,
+      };
+    }
+  }
+
+  if (session.issueId) {
+    const byChildIssue = findTaskLineageByChildIssue(project.path, session.issueId);
+    if (byChildIssue) {
+      const child = byChildIssue.lineage.childIssues[byChildIssue.childIndex];
+      if (child) {
+        return {
+          workflowState: child.state,
+          workflowRelationship: `child of ${byChildIssue.lineage.parentIssue}`,
+        };
+      }
+    }
+
+    const byParentIssue = findTaskLineageByParentIssue(project.path, session.issueId);
+    if (byParentIssue) {
+      return {
+        workflowState: "parent",
+        workflowRelationship: `parent of ${byParentIssue.lineage.childIssues.length} child issue${
+          byParentIssue.lineage.childIssues.length === 1 ? "" : "s"
+        }`,
+      };
+    }
+  }
+
+  return { workflowState: null, workflowRelationship: null };
 }
 
 // Column widths for the table
@@ -193,13 +340,33 @@ function printSessionRow(info: SessionInfo): void {
   }
 }
 
+function printVerboseDetails(info: SessionInfo): void {
+  const detailFields = [
+    `project=${info.project ?? "-"}`,
+    `role=${info.role ?? "-"}`,
+    `agent=${info.agent ?? "-"}`,
+    `provider=${info.provider ?? "-"}`,
+    `model=${info.model ?? "-"}`,
+    `authProfile=${info.authProfile ?? "-"}`,
+    `authMode=${info.authMode ?? "-"}`,
+    `promptRules=${info.promptRulesFiles.length > 0 ? info.promptRulesFiles.join("|") : "-"}`,
+    `promptPrefix=${info.promptPrefix ?? "-"}`,
+    `guardrails=${info.promptGuardrails.length > 0 ? info.promptGuardrails.join("|") : "-"}`,
+    `issueId=${info.issue ?? "-"}`,
+    `workflow=${info.workflowState ?? "-"}`,
+    `relation=${info.workflowRelationship ?? "-"}`,
+  ];
+  console.log(`  ${" ".repeat(COL.session)}${chalk.dim(detailFields.join("  "))}`);
+}
+
 export function registerStatus(program: Command): void {
   program
     .command("status")
     .description("Show all sessions with branch, activity, PR, and CI status")
     .option("-p, --project <id>", "Filter by project ID")
+    .option("-v, --verbose", "Show role/model/auth/workflow metadata for each session")
     .option("--json", "Output as JSON")
-    .action(async (opts: { project?: string; json?: boolean }) => {
+    .action(async (opts: { project?: string; verbose?: boolean; json?: boolean }) => {
       let config: ReturnType<typeof loadConfig>;
       try {
         config = loadConfig();
@@ -277,6 +444,9 @@ export function registerStatus(program: Command): void {
             jsonOutput.push(info);
           } else {
             printSessionRow(info);
+            if (opts.verbose) {
+              printVerboseDetails(info);
+            }
           }
         }
 

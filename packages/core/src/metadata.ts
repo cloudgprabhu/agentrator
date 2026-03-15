@@ -46,8 +46,12 @@ function serializeMetadata(data: Record<string, string>): string {
   );
 }
 
-/** Validate sessionId to prevent path traversal. */
-/** Normalize a raw metadata record, aliasing projectId/project and issueId/issue. */
+/**
+ * Normalize backward-compatible metadata aliases into a single raw record.
+ *
+ * This keeps both canonical and legacy keys available on read so older archive
+ * files can still be reconstructed without callers having to duplicate alias logic.
+ */
 export function normalizeMetadataRecord(raw: Record<string, string>): Record<string, string> {
   const normalized = { ...raw };
 
@@ -66,6 +70,7 @@ export function normalizeMetadataRecord(raw: Record<string, string>): Record<str
   return normalized;
 }
 
+/** Validate sessionId to prevent path traversal. */
 const VALID_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
 
 function validateSessionId(sessionId: SessionId): void {
@@ -88,20 +93,27 @@ export function readMetadata(dataDir: string, sessionId: SessionId): SessionMeta
   if (!existsSync(path)) return null;
 
   const content = readFileSync(path, "utf-8");
-  const raw = parseKeyValueContent(content);
+  const raw = normalizeMetadataRecord(parseKeyValueContent(content));
 
   return {
+    sessionId: raw["sessionId"],
     worktree: raw["worktree"] ?? "",
     branch: raw["branch"] ?? "",
     status: raw["status"] ?? "unknown",
     tmuxName: raw["tmuxName"],
-    issue: raw["issue"],
+    issue: raw["issue"] ?? raw["issueId"],
+    issueId: raw["issueId"] ?? raw["issue"],
     pr: raw["pr"],
     prAutoDetect:
       raw["prAutoDetect"] === "off" ? "off" : raw["prAutoDetect"] === "on" ? "on" : undefined,
     summary: raw["summary"],
-    project: raw["project"],
+    project: raw["project"] ?? raw["projectId"],
+    projectId: raw["projectId"] ?? raw["project"],
     agent: raw["agent"],
+    provider: raw["provider"],
+    authProfile: raw["authProfile"],
+    authMode: raw["authMode"] as SessionMetadata["authMode"],
+    model: raw["model"],
     createdAt: raw["createdAt"],
     runtimeHandle: raw["runtimeHandle"],
     restoredAt: raw["restoredAt"],
@@ -144,13 +156,32 @@ export function writeMetadata(
     status: metadata.status,
   };
 
+  if (metadata.sessionId) data["sessionId"] = metadata.sessionId;
   if (metadata.tmuxName) data["tmuxName"] = metadata.tmuxName;
-  if (metadata.issue) data["issue"] = metadata.issue;
+  if (metadata.issue) {
+    data["issue"] = metadata.issue;
+    if (!metadata.issueId) data["issueId"] = metadata.issue;
+  }
+  if (metadata.issueId) {
+    data["issueId"] = metadata.issueId;
+    if (!metadata.issue) data["issue"] = metadata.issueId;
+  }
   if (metadata.pr) data["pr"] = metadata.pr;
   if (metadata.prAutoDetect) data["prAutoDetect"] = metadata.prAutoDetect;
   if (metadata.summary) data["summary"] = metadata.summary;
-  if (metadata.project) data["project"] = metadata.project;
+  if (metadata.project) {
+    data["project"] = metadata.project;
+    if (!metadata.projectId) data["projectId"] = metadata.project;
+  }
+  if (metadata.projectId) {
+    data["projectId"] = metadata.projectId;
+    if (!metadata.project) data["project"] = metadata.projectId;
+  }
   if (metadata.agent) data["agent"] = metadata.agent;
+  if (metadata.provider) data["provider"] = metadata.provider;
+  if (metadata.authProfile) data["authProfile"] = metadata.authProfile;
+  if (metadata.authMode) data["authMode"] = metadata.authMode;
+  if (metadata.model) data["model"] = metadata.model;
   if (metadata.createdAt) data["createdAt"] = metadata.createdAt;
   if (metadata.runtimeHandle) data["runtimeHandle"] = metadata.runtimeHandle;
   if (metadata.restoredAt) data["restoredAt"] = metadata.restoredAt;
@@ -245,7 +276,7 @@ export function readArchivedMetadataRaw(
 
   if (!latest) return null;
   try {
-    return parseKeyValueContent(readFileSync(join(archiveDir, latest), "utf-8"));
+    return normalizeMetadataRecord(parseKeyValueContent(readFileSync(join(archiveDir, latest), "utf-8")));
   } catch {
     return null;
   }

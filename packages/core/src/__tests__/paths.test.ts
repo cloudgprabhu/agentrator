@@ -302,6 +302,15 @@ describe("Path Construction", () => {
     expect(reportsDir).toContain(baseDir);
     expect(archiveDir).toContain(baseDir);
   });
+
+  it("creates distinct directories for logical project keys", () => {
+    const plannerDir = getSessionsDir(configPath, "planner");
+    const implementerDir = getSessionsDir(configPath, "implementer");
+
+    expect(plannerDir).not.toBe(implementerDir);
+    expect(plannerDir).toMatch(/\.agent-orchestrator\/[a-f0-9]{12}-planner\/sessions$/);
+    expect(implementerDir).toMatch(/\.agent-orchestrator\/[a-f0-9]{12}-implementer\/sessions$/);
+  });
 });
 
 describe("Home Directory Expansion", () => {
@@ -413,9 +422,12 @@ describe("Origin File Management", () => {
   let tmpDir: string;
   let configPath: string;
   let projectPath: string;
+  let originalHome: string | undefined;
 
   beforeEach(() => {
+    originalHome = process.env.HOME;
     tmpDir = mkdtempSync(join(tmpdir(), "origin-test-"));
+    process.env.HOME = tmpDir;
     configPath = join(tmpDir, "agent-orchestrator.yaml");
     projectPath = join(tmpDir, "project");
     writeFileSync(configPath, "projects: {}");
@@ -423,6 +435,7 @@ describe("Origin File Management", () => {
   });
 
   afterEach(() => {
+    process.env.HOME = originalHome;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

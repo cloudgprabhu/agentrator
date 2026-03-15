@@ -40,7 +40,9 @@ import {
   type SCM,
   type PluginRegistry,
   type RuntimeHandle,
+  type SessionMetadata,
   type Issue,
+  type PRInfo,
   PR_STATE,
 } from "./types.js";
 import {
@@ -64,6 +66,13 @@ import {
 } from "./paths.js";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
+import { resolveModelRuntimeConfig } from "./model-profile-resolution.js";
+import { createAuthManager } from "./auth-manager.js";
+import {
+  createTaskLineageSessionRef,
+  recordTaskLineageChildSession,
+  recordTaskLineagePR,
+} from "./task-lineage.js";
 import {
   GLOBAL_PAUSE_REASON_KEY,
   GLOBAL_PAUSE_SOURCE_KEY,
@@ -76,6 +85,10 @@ import { safeJsonParse } from "./utils/validation.js";
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = 2_000;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = 10_000;
+
+function serializePromptMetadataList(values: string[] | undefined): string | undefined {
+  return values && values.length > 0 ? JSON.stringify(values) : undefined;
+}
 
 function errorIncludesSessionNotFound(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -262,17 +275,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   /**
    * Get the sessions directory for a project.
    */
-  function getProjectSessionsDir(project: ProjectConfig): string {
-    return getSessionsDir(config.configPath, project.path);
+  function getProjectSessionsDir(projectId: string): string {
+    return getSessionsDir(config.configPath, projectId);
   }
 
-  function getProjectPause(project: ProjectConfig): {
+  function getProjectPause(
+    project: ProjectConfig,
+    projectId: string,
+  ): {
     until: Date;
     reason: string;
     sourceSessionId: string;
   } | null {
-    const sessionsDir = getProjectSessionsDir(project);
     const orchestratorId = `${project.sessionPrefix}-orchestrator`;
+    const sessionsDir = getProjectSessionsDir(projectId);
     const orchestratorRaw = readMetadataRaw(sessionsDir, orchestratorId);
     if (!orchestratorRaw) return null;
 
@@ -298,7 +314,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   function getManagedWorkspaceRoots(project: ProjectConfig, projectId?: string): string[] {
-    const roots = [getWorktreesDir(config.configPath, project.path)];
+    const roots = [getWorktreesDir(config.configPath, projectId ?? project.path)];
     const legacyIds = new Set<string>();
     if (projectId) {
       legacyIds.add(projectId);
@@ -481,8 +497,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return repaired;
   }
 
-  function loadActiveSessionRecords(project: ProjectConfig): ActiveSessionRecord[] {
-    const sessionsDir = getProjectSessionsDir(project);
+  function loadActiveSessionRecords(projectId: string): ActiveSessionRecord[] {
+    const sessionsDir = getProjectSessionsDir(projectId);
     if (!existsSync(sessionsDir)) return [];
 
     const records = listMetadata(sessionsDir).flatMap((sessionName) => {
@@ -536,7 +552,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const matchesCriteria = (id: string, raw: Record<string, string> | null): boolean => {
       if (!raw) return false;
       if (raw["agent"] !== "opencode") return false;
-      if (criteria.issueId !== undefined && raw["issue"] !== criteria.issueId) return false;
+      if (criteria.issueId !== undefined && (raw["issueId"] ?? raw["issue"]) !== criteria.issueId)
+        return false;
       if (criteria.sessionId !== undefined && id !== criteria.sessionId) return false;
       return true;
     };
@@ -685,6 +702,46 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return { runtime, agent, workspace, tracker, scm };
   }
 
+  function getProjectWorkflow(project: ProjectConfig) {
+    return project.workflow ? config.workflow?.[project.workflow] : undefined;
+  }
+
+  function updateWorkflowLineageForSpawn(
+    project: ProjectConfig,
+    issueId: string | undefined,
+    roleKey: string | undefined,
+    session: Session,
+  ): void {
+    if (!issueId || !roleKey) return;
+
+    const workflow = getProjectWorkflow(project);
+    if (!workflow) return;
+
+    const sessionRef = createTaskLineageSessionRef(session, roleKey);
+    try {
+      if (workflow.childIssueRole === roleKey) {
+        recordTaskLineageChildSession(project.path, issueId, "implementation", sessionRef);
+      } else if (workflow.reviewRole === roleKey || workflow.ciFixRole === roleKey) {
+        recordTaskLineageChildSession(project.path, issueId, "review", sessionRef);
+      }
+    } catch {
+      // Best effort — lineage should not block session creation.
+    }
+  }
+
+  function updateWorkflowLineageForPR(project: ProjectConfig, sessionId: string, pr: PRInfo): void {
+    try {
+      recordTaskLineagePR(project.path, sessionId, {
+        number: pr.number,
+        url: pr.url,
+        branch: pr.branch,
+        state: PR_STATE.OPEN,
+      });
+    } catch {
+      // Best effort — PR claim should not fail on lineage persistence.
+    }
+  }
+
   async function ensureOpenCodeSessionMapping(
     session: Session,
     sessionName: string,
@@ -708,7 +765,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
   function findSessionRecord(sessionId: SessionId): LocatedSession | null {
     for (const [projectId, project] of Object.entries(config.projects)) {
-      const sessionsDir = getProjectSessionsDir(project);
+      const sessionsDir = getProjectSessionsDir(projectId);
       const raw = readMetadataRaw(sessionsDir, sessionId);
       if (!raw) continue;
 
@@ -834,6 +891,37 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
   }
 
+  async function assertResolvedAuthProfileReady(opts: {
+    projectId: string;
+    roleKey?: string;
+    authProfileKey?: string;
+  }): Promise<void> {
+    if (!opts.authProfileKey) return;
+
+    const manager = createAuthManager({ config });
+    const health = await manager.checkProfileHealth(opts.authProfileKey);
+    const scopeLabel = opts.roleKey
+      ? `project '${opts.projectId}' role '${opts.roleKey}'`
+      : `project '${opts.projectId}'`;
+    const prefix = `Resolved auth profile '${opts.authProfileKey}' for ${scopeLabel}`;
+
+    if (health.state === "invalid") {
+      throw new Error(`${prefix} is invalid: ${health.message}`);
+    }
+
+    if (health.authStatus === "unavailable") {
+      throw new Error(`${prefix} is unavailable: ${health.message}`);
+    }
+
+    if (health.authStatus === "unsupported_environment") {
+      throw new Error(`${prefix} is unsupported in this environment: ${health.message}`);
+    }
+
+    if (health.authStatus === "not_authenticated") {
+      throw new Error(`${prefix} is not authenticated: ${health.message}`);
+    }
+  }
+
   // Define methods as local functions so `this` is not needed
   async function spawn(spawnConfig: SessionSpawnConfig): Promise<Session> {
     const project = config.projects[spawnConfig.projectId];
@@ -841,29 +929,37 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Unknown project: ${spawnConfig.projectId}`);
     }
 
-    const pause = getProjectPause(project);
+    const pause = getProjectPause(project, spawnConfig.projectId);
     if (pause) {
       throw new Error(
         `Project is paused due to model rate limit until ${pause.until.toISOString()} (${pause.reason}; source: ${pause.sourceSessionId})`,
       );
     }
 
-    const plugins = resolvePlugins(project);
+    const resolvedModelRuntime = resolveModelRuntimeConfig({
+      config,
+      projectId: spawnConfig.projectId,
+      agent: project.agent ?? config.defaults.agent,
+      roleKey: spawnConfig.role,
+      ...(spawnConfig.agent ? { agentOverride: spawnConfig.agent } : {}),
+    });
+    const resolvedAuthMode = resolvedModelRuntime.authProfileKey
+      ? config.authProfiles?.[resolvedModelRuntime.authProfileKey]?.type
+      : undefined;
+    await assertResolvedAuthProfileReady({
+      projectId: spawnConfig.projectId,
+      roleKey: resolvedModelRuntime.roleKey,
+      authProfileKey: resolvedModelRuntime.authProfileKey,
+    });
+
+    const selectedAgentName = resolvedModelRuntime.agent;
+    const plugins = resolvePlugins(project, selectedAgentName);
     if (!plugins.runtime) {
       throw new Error(`Runtime plugin '${project.runtime ?? config.defaults.runtime}' not found`);
     }
 
-    // Allow --agent override to swap the agent plugin for this session
-    if (spawnConfig.agent) {
-      const overrideAgent = registry.get<Agent>("agent", spawnConfig.agent);
-      if (!overrideAgent) {
-        throw new Error(`Agent plugin '${spawnConfig.agent}' not found`);
-      }
-      plugins.agent = overrideAgent;
-    }
-
     if (!plugins.agent) {
-      throw new Error(`Agent plugin '${project.agent ?? config.defaults.agent}' not found`);
+      throw new Error(`Agent plugin '${selectedAgentName}' not found`);
     }
 
     // Validate issue exists BEFORE creating any resources
@@ -885,11 +981,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     // Get the sessions directory for this project
-    const sessionsDir = getProjectSessionsDir(project);
+    const sessionsDir = getProjectSessionsDir(spawnConfig.projectId);
 
     // Validate and store .origin file (new architecture only)
     if (config.configPath) {
-      validateAndStoreOrigin(config.configPath, project.path);
+      validateAndStoreOrigin(config.configPath, spawnConfig.projectId);
     }
 
     // Determine session ID — atomically reserve to prevent concurrent collisions
@@ -973,6 +1069,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       issueId: spawnConfig.issueId,
       issueContext,
       userPrompt: spawnConfig.prompt,
+      roleRulesFiles: resolvedModelRuntime.promptSettings.rulesFiles,
+      rolePromptPrefix: resolvedModelRuntime.promptSettings.promptPrefix,
+      roleGuardrails: resolvedModelRuntime.promptSettings.guardrails,
       lineage: spawnConfig.lineage,
       siblings: spawnConfig.siblings,
     });
@@ -998,13 +1097,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ...project,
         agentConfig: {
           ...(project.agentConfig ?? {}),
+          ...(resolvedModelRuntime.runtimeSettings.reasoningEffort
+            ? { reasoningEffort: resolvedModelRuntime.runtimeSettings.reasoningEffort }
+            : {}),
+          ...(resolvedModelRuntime.runtimeSettings.extra ?? {}),
           ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}),
         },
       },
       issueId: spawnConfig.issueId,
       prompt: composedPrompt,
-      permissions: project.agentConfig?.permissions,
-      model: project.agentConfig?.model,
+      permissions:
+        resolvedModelRuntime.runtimeSettings.approvalPolicy ?? project.agentConfig?.permissions,
+      model: resolvedModelRuntime.model ?? project.agentConfig?.model,
       subagent: spawnConfig.subagent ?? configuredSubagent,
     };
 
@@ -1061,18 +1165,38 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       lastActivityAt: new Date(),
       metadata: {
         ...(reusedOpenCodeSessionId ? { opencodeSessionId: reusedOpenCodeSessionId } : {}),
+        ...(serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles)
+          ? { promptRulesFiles: serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles)! }
+          : {}),
+        ...(resolvedModelRuntime.promptSettings.promptPrefix
+          ? { promptPrefix: resolvedModelRuntime.promptSettings.promptPrefix }
+          : {}),
+        ...(serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails)
+          ? { promptGuardrails: serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails)! }
+          : {}),
       },
     };
 
     try {
       writeMetadata(sessionsDir, sessionId, {
+        sessionId,
         worktree: workspacePath,
         branch,
         status: "spawning",
+        role: resolvedModelRuntime.roleKey,
         tmuxName, // Store tmux name for mapping
         issue: spawnConfig.issueId,
+        issueId: spawnConfig.issueId,
         project: spawnConfig.projectId,
+        projectId: spawnConfig.projectId,
         agent: plugins.agent.name, // Persist agent name for lifecycle manager
+        provider: resolvedModelRuntime.providerKey,
+        authProfile: resolvedModelRuntime.authProfileKey,
+        authMode: resolvedAuthMode,
+        model: agentLaunchConfig.model,
+        promptRulesFiles: serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles),
+        promptPrefix: resolvedModelRuntime.promptSettings.promptPrefix,
+        promptGuardrails: serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails),
         createdAt: new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: reusedOpenCodeSessionId,
@@ -1139,6 +1263,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
+    updateWorkflowLineageForSpawn(project, spawnConfig.issueId, resolvedModelRuntime.roleKey, session);
+
     return session;
   }
 
@@ -1148,19 +1274,36 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw new Error(`Unknown project: ${orchestratorConfig.projectId}`);
     }
 
-    const pause = getProjectPause(project);
+    const pause = getProjectPause(project, orchestratorConfig.projectId);
     if (pause) {
       throw new Error(
         `Project is paused due to model rate limit until ${pause.until.toISOString()} (${pause.reason}; source: ${pause.sourceSessionId})`,
       );
     }
 
-    const plugins = resolvePlugins(project);
+    const projectWorkflow = project.workflow ? config.workflow?.[project.workflow] : undefined;
+    const resolvedModelRuntime = resolveModelRuntimeConfig({
+      config,
+      projectId: orchestratorConfig.projectId,
+      agent: project.agent ?? config.defaults.agent,
+      roleKey: projectWorkflow?.parentIssueRole,
+    });
+    const resolvedAuthMode = resolvedModelRuntime.authProfileKey
+      ? config.authProfiles?.[resolvedModelRuntime.authProfileKey]?.type
+      : undefined;
+    await assertResolvedAuthProfileReady({
+      projectId: orchestratorConfig.projectId,
+      roleKey: resolvedModelRuntime.roleKey,
+      authProfileKey: resolvedModelRuntime.authProfileKey,
+    });
+
+    const selectedAgentName = resolvedModelRuntime.agent;
+    const plugins = resolvePlugins(project, selectedAgentName);
     if (!plugins.runtime) {
       throw new Error(`Runtime plugin '${project.runtime ?? config.defaults.runtime}' not found`);
     }
     if (!plugins.agent) {
-      throw new Error(`Agent plugin '${project.agent ?? config.defaults.agent}' not found`);
+      throw new Error(`Agent plugin '${selectedAgentName}' not found`);
     }
 
     const sessionId = `${project.sessionPrefix}-orchestrator`;
@@ -1176,11 +1319,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     // Get the sessions directory for this project
-    const sessionsDir = getProjectSessionsDir(project);
+    const sessionsDir = getProjectSessionsDir(orchestratorConfig.projectId);
 
     // Validate and store .origin file
     if (config.configPath) {
-      validateAndStoreOrigin(config.configPath, project.path);
+      validateAndStoreOrigin(config.configPath, orchestratorConfig.projectId);
     }
 
     // Setup agent hooks for automatic metadata updates
@@ -1193,7 +1336,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // via tmux send-keys or paste-buffer. File-based approach is reliable.
     let systemPromptFile: string | undefined;
     if (orchestratorConfig.systemPrompt) {
-      const baseDir = getProjectBaseDir(config.configPath, project.path);
+      const baseDir = getProjectBaseDir(config.configPath, orchestratorConfig.projectId);
       mkdirSync(baseDir, { recursive: true });
       systemPromptFile = join(baseDir, "orchestrator-prompt.md");
       writeFileSync(systemPromptFile, orchestratorConfig.systemPrompt, "utf-8");
@@ -1291,11 +1434,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ...project,
         agentConfig: {
           ...(project.agentConfig ?? {}),
+          ...(resolvedModelRuntime.runtimeSettings.reasoningEffort
+            ? { reasoningEffort: resolvedModelRuntime.runtimeSettings.reasoningEffort }
+            : {}),
+          ...(resolvedModelRuntime.runtimeSettings.extra ?? {}),
           ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
         },
       },
       permissions: "permissionless" as const,
-      model: project.agentConfig?.orchestratorModel ?? project.agentConfig?.model,
+      model:
+        project.agentConfig?.orchestratorModel ??
+        resolvedModelRuntime.model ??
+        project.agentConfig?.model,
       systemPromptFile,
       subagent: configuredSubagent,
     };
@@ -1332,18 +1482,36 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       lastActivityAt: new Date(),
       metadata: {
         ...(reusableOpenCodeSessionId ? { opencodeSessionId: reusableOpenCodeSessionId } : {}),
+        ...(serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles)
+          ? { promptRulesFiles: serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles)! }
+          : {}),
+        ...(resolvedModelRuntime.promptSettings.promptPrefix
+          ? { promptPrefix: resolvedModelRuntime.promptSettings.promptPrefix }
+          : {}),
+        ...(serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails)
+          ? { promptGuardrails: serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails)! }
+          : {}),
       },
     };
 
     try {
       writeMetadata(sessionsDir, sessionId, {
+        sessionId,
         worktree: project.path,
         branch: project.defaultBranch,
         status: "working",
         role: "orchestrator",
         tmuxName,
         project: orchestratorConfig.projectId,
+        projectId: orchestratorConfig.projectId,
         agent: plugins.agent.name,
+        provider: resolvedModelRuntime.providerKey,
+        authProfile: resolvedModelRuntime.authProfileKey,
+        authMode: resolvedAuthMode,
+        model: agentLaunchConfig.model,
+        promptRulesFiles: serializePromptMetadataList(resolvedModelRuntime.promptSettings.rulesFiles),
+        promptPrefix: resolvedModelRuntime.promptSettings.promptPrefix,
+        promptGuardrails: serializePromptMetadataList(resolvedModelRuntime.promptSettings.guardrails),
         createdAt: new Date().toISOString(),
         runtimeHandle: JSON.stringify(handle),
         opencodeSessionId: reusableOpenCodeSessionId,
@@ -1391,7 +1559,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   async function list(projectId?: string): Promise<Session[]> {
     const allSessions = Object.entries(config.projects).flatMap(([entryProjectId, project]) => {
       if (projectId && entryProjectId !== projectId) return [];
-      return loadActiveSessionRecords(project).map((record) => ({
+      return loadActiveSessionRecords(entryProjectId).map((record) => ({
         sessionName: record.sessionName,
         projectId: entryProjectId,
         raw: record.raw,
@@ -1402,8 +1570,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const tasks = allSessions.map(async ({ sessionName, projectId: sessionProjectId, raw }) => {
       const project = config.projects[sessionProjectId];
       if (!project) return null;
-
-      const sessionsDir = getProjectSessionsDir(project);
+      const sessionsDir = getProjectSessionsDir(sessionProjectId);
 
       let createdAt: Date | undefined;
       let modifiedAt: Date | undefined;
@@ -1455,8 +1622,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
   async function get(sessionId: SessionId): Promise<Session | null> {
     // Try to find the session in any project's sessions directory
-    for (const project of Object.values(config.projects)) {
-      const sessionsDir = getProjectSessionsDir(project);
+    for (const [projectId, project] of Object.entries(config.projects)) {
+      const sessionsDir = getProjectSessionsDir(projectId);
       const raw = readMetadataRaw(sessionsDir, sessionId);
       if (!raw) continue;
 
@@ -1671,7 +1838,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     for (const [projectKey, project] of Object.entries(config.projects)) {
       if (projectId && projectKey !== projectId) continue;
 
-      const sessionsDir = getProjectSessionsDir(project);
+      const sessionsDir = getProjectSessionsDir(projectKey);
       for (const archivedId of listArchivedSessionIds(sessionsDir)) {
         if (activeSessionKeys.has(`${projectKey}:${archivedId}`)) continue;
 
@@ -1728,8 +1895,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   }
 
   async function send(sessionId: SessionId, message: string): Promise<void> {
-    const { raw, sessionsDir, project } = requireSessionRecord(sessionId);
-    const pause = getProjectPause(project);
+    const { raw, sessionsDir, project, projectId } = requireSessionRecord(sessionId);
+    const pause = getProjectPause(project, projectId);
     const orchestratorId = `${project.sessionPrefix}-orchestrator`;
     if (pause && sessionId !== orchestratorId) {
       throw new Error(
@@ -1959,7 +2126,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     const conflictingSessions = new Set<SessionId>();
-    const activeRecords = loadActiveSessionRecords(project).filter(
+    const activeRecords = loadActiveSessionRecords(projectId).filter(
       (record) => record.sessionName !== sessionId,
     );
 
@@ -1990,6 +2157,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       branch: pr.branch,
       prAutoDetect: "",
     });
+    updateWorkflowLineageForPR(project, sessionId, pr);
 
     for (const previousSessionId of takenOverFrom) {
       const previousRaw = readMetadataRaw(sessionsDir, previousSessionId);
@@ -2071,7 +2239,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Fall back to archived metadata (killed/cleaned sessions)
     if (!raw) {
       for (const [key, proj] of Object.entries(config.projects)) {
-        const dir = getProjectSessionsDir(proj);
+        const dir = getProjectSessionsDir(key);
         const archived = readArchivedMetadataRaw(dir, sessionId);
         if (archived) {
           raw = archived;
@@ -2081,6 +2249,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           fromArchive = true;
           break;
         }
+        if (raw) break;
       }
     }
 
@@ -2121,18 +2290,25 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     if (fromArchive) {
       writeMetadata(sessionsDir, sessionId, {
+        sessionId,
         worktree: raw["worktree"] ?? "",
         branch: raw["branch"] ?? "",
         status: raw["status"] ?? "killed",
         role: raw["role"],
         tmuxName: raw["tmuxName"],
-        issue: raw["issue"],
+        issue: raw["issue"] ?? raw["issueId"],
+        issueId: raw["issueId"] ?? raw["issue"],
         pr: raw["pr"],
         prAutoDetect:
           raw["prAutoDetect"] === "off" ? "off" : raw["prAutoDetect"] === "on" ? "on" : undefined,
         summary: raw["summary"],
-        project: raw["project"],
+        project: raw["project"] ?? raw["projectId"],
+        projectId: raw["projectId"] ?? raw["project"],
         agent: raw["agent"],
+        provider: raw["provider"],
+        authProfile: raw["authProfile"],
+        authMode: raw["authMode"] as SessionMetadata["authMode"],
+        model: raw["model"],
         createdAt: raw["createdAt"],
         runtimeHandle: raw["runtimeHandle"],
         opencodeSessionId: raw["opencodeSessionId"],

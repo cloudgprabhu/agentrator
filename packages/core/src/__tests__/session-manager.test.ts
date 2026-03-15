@@ -44,6 +44,8 @@ let mockWorkspace: Workspace;
 let mockRegistry: PluginRegistry;
 let config: OrchestratorConfig;
 let originalPath: string | undefined;
+let originalHome: string | undefined;
+let originalOpenAIApiKey: string | undefined;
 
 function makeHandle(id: string): RuntimeHandle {
   return { id, runtimeName: "mock", data: {} };
@@ -136,8 +138,12 @@ function installMockGit(remoteBranches: string[]): string {
 
 beforeEach(() => {
   originalPath = process.env.PATH;
+  originalHome = process.env.HOME;
+  originalOpenAIApiKey = process.env.OPENAI_API_KEY;
   tmpDir = join(tmpdir(), `ao-test-session-mgr-${randomUUID()}`);
   mkdirSync(tmpDir, { recursive: true });
+  process.env.HOME = tmpDir;
+  process.env.OPENAI_API_KEY = "test-openai-key";
 
   // Create a temporary config file
   configPath = join(tmpDir, "agent-orchestrator.yaml");
@@ -220,14 +226,16 @@ beforeEach(() => {
   };
 
   // Calculate sessions directory
-  sessionsDir = getSessionsDir(configPath, join(tmpDir, "my-app"));
+  sessionsDir = getSessionsDir(configPath, "my-app");
   mkdirSync(sessionsDir, { recursive: true });
 });
 
 afterEach(() => {
   process.env.PATH = originalPath;
+  process.env.HOME = originalHome;
+  process.env.OPENAI_API_KEY = originalOpenAIApiKey;
   // Clean up hash-based directories in ~/.agent-orchestrator
-  const projectBaseDir = getProjectBaseDir(configPath, join(tmpDir, "my-app"));
+  const projectBaseDir = getProjectBaseDir(configPath, "my-app");
   if (existsSync(projectBaseDir)) {
     rmSync(projectBaseDir, { recursive: true, force: true });
   }
@@ -432,8 +440,11 @@ describe("spawn", () => {
     const meta = readMetadata(sessionsDir, "app-1");
     expect(meta).not.toBeNull();
     expect(meta!.status).toBe("spawning");
+    expect(meta!.sessionId).toBe("app-1");
     expect(meta!.project).toBe("my-app");
+    expect(meta!.projectId).toBe("my-app");
     expect(meta!.issue).toBe("INT-42");
+    expect(meta!.issueId).toBe("INT-42");
   });
 
   it("reuses OpenCode session mapping by issue when available", async () => {
@@ -748,6 +759,455 @@ describe("spawn", () => {
 
       expect(mockAgent.getLaunchCommand).toHaveBeenCalled();
       expect(mockCodexAgent.getLaunchCommand).not.toHaveBeenCalled();
+    });
+
+    it("uses workflow role model profile resolution for spawn runtime config", async () => {
+      const configWithModelProfiles: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: { kind: "openai" },
+        },
+        authProfiles: {
+          openaiApi: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY",
+          },
+        },
+        modelProfiles: {
+          impl: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o4-mini",
+            runtime: {
+              approvalPolicy: "suggest",
+              reasoningEffort: "high",
+            },
+          },
+        },
+        roles: {
+          implementer: {
+            modelProfile: "impl",
+          },
+        },
+        workflow: {
+          default: {
+            parentIssueRole: "implementer",
+            childIssueRole: "implementer",
+            reviewRole: "implementer",
+            ciFixRole: "implementer",
+          },
+        },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            workflow: "default",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithModelProfiles,
+        registry: registryWithMultipleAgents,
+      });
+
+      await sm.spawn({ projectId: "my-app" });
+
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "o4-mini",
+          permissions: "suggest",
+          projectConfig: expect.objectContaining({
+            agentConfig: expect.objectContaining({ reasoningEffort: "high" }),
+          }),
+        }),
+      );
+    });
+
+    it("persists resolved model/profile metadata fields on spawn", async () => {
+      const configWithModelProfiles: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: { kind: "openai" },
+        },
+        authProfiles: {
+          openaiApi: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY",
+          },
+        },
+        modelProfiles: {
+          impl: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o4-mini",
+          },
+        },
+        roles: {
+          implementer: {
+            modelProfile: "impl",
+          },
+        },
+        workflow: {
+          default: {
+            parentIssueRole: "implementer",
+            childIssueRole: "implementer",
+            reviewRole: "implementer",
+            ciFixRole: "implementer",
+          },
+        },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            workflow: "default",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithModelProfiles,
+        registry: registryWithMultipleAgents,
+      });
+
+      await sm.spawn({ projectId: "my-app", issueId: "INT-123" });
+
+      const meta = readMetadata(sessionsDir, "app-1");
+      expect(meta).not.toBeNull();
+      expect(meta!.sessionId).toBe("app-1");
+      expect(meta!.projectId).toBe("my-app");
+      expect(meta!.issueId).toBe("INT-123");
+      expect(meta!.role).toBe("implementer");
+      expect(meta!.agent).toBe("codex");
+      expect(meta!.provider).toBe("openai");
+      expect(meta!.authProfile).toBe("openaiApi");
+      expect(meta!.authMode).toBe("api-key");
+      expect(meta!.model).toBe("o4-mini");
+    });
+
+    it("uses explicit spawn role to override workflow childIssueRole", async () => {
+      const configWithMultipleRoles: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: { kind: "openai" },
+        },
+        authProfiles: {
+          openaiApi: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY",
+          },
+        },
+        modelProfiles: {
+          impl: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o4-mini",
+          },
+          plannerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o3",
+          },
+        },
+        roles: {
+          implementer: {
+            modelProfile: "impl",
+          },
+          planner: {
+            modelProfile: "plannerModel",
+          },
+        },
+        workflow: {
+          default: {
+            parentIssueRole: "implementer",
+            childIssueRole: "implementer",
+            reviewRole: "implementer",
+            ciFixRole: "implementer",
+          },
+        },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            workflow: "default",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithMultipleRoles,
+        registry: registryWithMultipleAgents,
+      });
+
+      await sm.spawn({ projectId: "my-app", issueId: "INT-123", role: "planner" });
+
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "o3" }),
+      );
+
+      const meta = readMetadata(sessionsDir, "app-1");
+      expect(meta).not.toBeNull();
+      expect(meta!.role).toBe("planner");
+      expect(meta!.model).toBe("o3");
+    });
+
+    it("blocks spawn when the resolved auth profile is unavailable", async () => {
+      const emptyBin = join(tmpDir, "empty-bin");
+      mkdirSync(emptyBin, { recursive: true });
+      process.env.PATH = emptyBin;
+
+      const configWithBrowserAuth: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: {
+            kind: "openai",
+            capabilities: { browserAuth: true },
+          },
+        },
+        authProfiles: {
+          codexBrowser: {
+            type: "browser-account",
+            provider: "openai",
+            accountType: "chatgpt-plus",
+          },
+        },
+        modelProfiles: {
+          plannerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "codexBrowser",
+            model: "o3",
+          },
+        },
+        roles: {
+          planner: {
+            modelProfile: "plannerModel",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithBrowserAuth,
+        registry: registryWithMultipleAgents,
+      });
+
+      await expect(
+        sm.spawn({ projectId: "my-app", issueId: "INT-123", role: "planner" }),
+      ).rejects.toThrow("Resolved auth profile 'codexBrowser' for project 'my-app' role 'planner' is unavailable");
+      expect(mockRuntime.create).not.toHaveBeenCalled();
+    });
+
+    it("blocks spawn when the resolved auth profile is not authenticated", async () => {
+      const binDir = join(tmpDir, "codex-not-auth-bin");
+      mkdirSync(binDir, { recursive: true });
+      const codexPath = join(binDir, "codex");
+      writeFileSync(
+        codexPath,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'if [[ \"$1\" == \"login\" && \"$2\" == \"status\" ]]; then',
+          "  printf 'login required\\n'",
+          "  exit 0",
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      chmodSync(codexPath, 0o755);
+      process.env.PATH = `${binDir}:/usr/bin:/bin`;
+
+      const configWithBrowserAuth: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: {
+            kind: "openai",
+            capabilities: { browserAuth: true },
+          },
+        },
+        authProfiles: {
+          codexBrowser: {
+            type: "browser-account",
+            provider: "openai",
+            accountType: "chatgpt-plus",
+          },
+        },
+        modelProfiles: {
+          plannerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "codexBrowser",
+            model: "o3",
+          },
+        },
+        roles: {
+          planner: {
+            modelProfile: "plannerModel",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithBrowserAuth,
+        registry: registryWithMultipleAgents,
+      });
+
+      await expect(
+        sm.spawn({ projectId: "my-app", issueId: "INT-123", role: "planner" }),
+      ).rejects.toThrow(
+        "Resolved auth profile 'codexBrowser' for project 'my-app' role 'planner' is not authenticated",
+      );
+      expect(mockRuntime.create).not.toHaveBeenCalled();
+    });
+
+    it("applies agent override precedence over role-resolved agent when compatible", async () => {
+      const configWithRole: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: { kind: "openai" },
+        },
+        authProfiles: {
+          openaiApi: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY",
+          },
+        },
+        modelProfiles: {
+          plannerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o3",
+          },
+        },
+        roles: {
+          planner: {
+            modelProfile: "plannerModel",
+          },
+        },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithRole,
+        registry: registryWithMultipleAgents,
+      });
+
+      await sm.spawn({
+        projectId: "my-app",
+        issueId: "INT-123",
+        role: "planner",
+        agent: "codex",
+      });
+
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalled();
+      expect(mockAgent.getLaunchCommand).not.toHaveBeenCalled();
+      const meta = readMetadata(sessionsDir, "app-1");
+      expect(meta).not.toBeNull();
+      expect(meta!.role).toBe("planner");
+      expect(meta!.agent).toBe("codex");
+      expect(meta!.model).toBe("o3");
+    });
+
+    it("injects model/role prompt rules and guardrails into spawned prompt", async () => {
+      const projectPath = config.projects["my-app"]!.path;
+      mkdirSync(projectPath, { recursive: true });
+      writeFileSync(
+        join(projectPath, "model-rules.md"),
+        "Model rule: prefer backward compatibility.",
+      );
+      writeFileSync(join(projectPath, "role-rules.md"), "Role rule: produce a brief plan first.");
+
+      const configWithRolePromptSettings: OrchestratorConfig = {
+        ...config,
+        providers: {
+          openai: { kind: "openai" },
+        },
+        authProfiles: {
+          openaiApi: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY",
+          },
+        },
+        modelProfiles: {
+          implementerModel: {
+            provider: "openai",
+            agent: "codex",
+            authProfile: "openaiApi",
+            model: "o4-mini",
+            rulesFile: "model-rules.md",
+            promptPrefix: "Model prefix text.",
+            guardrails: ["No force push"],
+          },
+        },
+        roles: {
+          implementer: {
+            modelProfile: "implementerModel",
+            rulesFile: "role-rules.md",
+            promptPrefix: "Role prefix text.",
+            guardrails: ["Always run tests"],
+          },
+        },
+        workflow: {
+          default: {
+            parentIssueRole: "implementer",
+            childIssueRole: "implementer",
+            reviewRole: "implementer",
+            ciFixRole: "implementer",
+          },
+        },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            workflow: "default",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithRolePromptSettings,
+        registry: registryWithMultipleAgents,
+      });
+
+      await sm.spawn({ projectId: "my-app", issueId: "INT-123" });
+
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("Model rule: prefer backward compatibility."),
+        }),
+      );
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("Role rule: produce a brief plan first."),
+        }),
+      );
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: expect.stringContaining("Role prefix text.") }),
+      );
+      expect(mockCodexAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: expect.stringContaining("## Guardrails") }),
+      );
+      const meta = readMetadataRaw(sessionsDir, "app-1");
+      expect(meta).not.toBeNull();
+      expect(meta!["promptRulesFiles"]).toBe(JSON.stringify(["model-rules.md", "role-rules.md"]));
+      expect(meta!["promptPrefix"]).toBe("Role prefix text.");
+      expect(meta!["promptGuardrails"]).toBe(JSON.stringify(["No force push", "Always run tests"]));
     });
 
     it("persists agent name in metadata when override is used", async () => {
@@ -1184,6 +1644,71 @@ describe("list", () => {
     expect(sessions[0].id).toBe("app-1");
   });
 
+  it("keeps shared-path project sessions isolated by canonical project ID", async () => {
+    config.projects = {
+      planner: {
+        name: "Planner",
+        repo: "org/shared-app",
+        path: join(tmpDir, "shared-repo"),
+        defaultBranch: "main",
+        sessionPrefix: "pla",
+        scm: { plugin: "github" },
+        tracker: { plugin: "github" },
+      },
+      implementer: {
+        name: "Implementer",
+        repo: "org/shared-app",
+        path: join(tmpDir, "shared-repo"),
+        defaultBranch: "main",
+        sessionPrefix: "imp",
+        scm: { plugin: "github" },
+        tracker: { plugin: "github" },
+      },
+    };
+
+    const plannerSessionsDir = getSessionsDir(configPath, "planner");
+    const implementerSessionsDir = getSessionsDir(configPath, "implementer");
+    mkdirSync(plannerSessionsDir, { recursive: true });
+    mkdirSync(implementerSessionsDir, { recursive: true });
+
+    writeMetadata(plannerSessionsDir, "pla-1", {
+      worktree: "/tmp/planner",
+      branch: "feat/PLAN-1",
+      status: "working",
+      project: "planner",
+      projectId: "planner",
+      runtimeHandle: JSON.stringify(makeHandle("rt-planner")),
+    });
+    writeMetadata(implementerSessionsDir, "imp-1", {
+      worktree: "/tmp/implementer",
+      branch: "feat/IMP-1",
+      status: "working",
+      project: "implementer",
+      projectId: "implementer",
+      runtimeHandle: JSON.stringify(makeHandle("rt-implementer")),
+    });
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const plannerSessions = await sm.list("planner");
+    const implementerSessions = await sm.list("implementer");
+    const allSessions = await sm.list();
+
+    expect(plannerSessions).toHaveLength(1);
+    expect(plannerSessions[0].id).toBe("pla-1");
+    expect(plannerSessions[0].projectId).toBe("planner");
+    expect(plannerSessions[0].runtimeHandle?.id).toBe("rt-planner");
+
+    expect(implementerSessions).toHaveLength(1);
+    expect(implementerSessions[0].id).toBe("imp-1");
+    expect(implementerSessions[0].projectId).toBe("implementer");
+    expect(implementerSessions[0].runtimeHandle?.id).toBe("rt-implementer");
+
+    expect(allSessions.map((session) => `${session.projectId}:${session.id}`).sort()).toEqual([
+      "implementer:imp-1",
+      "planner:pla-1",
+    ]);
+  });
+
   it("clears enrichment timeout when enrichment completes quickly", async () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
@@ -1409,6 +1934,27 @@ describe("get", () => {
     expect(session!.pr).not.toBeNull();
     expect(session!.pr!.number).toBe(42);
     expect(session!.pr!.url).toBe("https://github.com/org/repo/pull/42");
+  });
+
+  it("reads canonical projectId/issueId metadata keys", async () => {
+    writeFileSync(
+      join(sessionsDir, "app-1"),
+      [
+        "worktree=/tmp",
+        "branch=main",
+        "status=working",
+        "projectId=my-app",
+        "issueId=INT-500",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const session = await sm.get("app-1");
+
+    expect(session).not.toBeNull();
+    expect(session!.projectId).toBe("my-app");
+    expect(session!.issueId).toBe("INT-500");
   });
 
   it("detects activity using agent-native mechanism", async () => {
@@ -2529,11 +3075,88 @@ describe("spawnOrchestrator", () => {
     const meta = readMetadata(sessionsDir, "app-orchestrator");
     expect(meta).not.toBeNull();
     expect(meta!.status).toBe("working");
+    expect(meta!.sessionId).toBe("app-orchestrator");
     expect(meta!.project).toBe("my-app");
+    expect(meta!.projectId).toBe("my-app");
     expect(meta!.worktree).toBe(join(tmpDir, "my-app"));
     expect(meta!.branch).toBe("main");
     expect(meta!.tmuxName).toBeDefined();
     expect(meta!.runtimeHandle).toBeDefined();
+  });
+
+  it("persists resolved runtime metadata fields for orchestrator spawn", async () => {
+    const codexAgent: Agent = {
+      ...mockAgent,
+      name: "codex",
+    };
+    const registryWithCodex: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return codexAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    const configWithModelProfiles: OrchestratorConfig = {
+      ...config,
+      providers: {
+        openai: { kind: "openai" },
+      },
+      authProfiles: {
+        openaiApi: {
+          type: "api-key",
+          provider: "openai",
+          credentialEnvVar: "OPENAI_API_KEY",
+        },
+      },
+      modelProfiles: {
+        orchestrator: {
+          provider: "openai",
+          agent: "codex",
+          authProfile: "openaiApi",
+          model: "o3",
+        },
+      },
+      roles: {
+        orchestratorRole: {
+          modelProfile: "orchestrator",
+        },
+      },
+      workflow: {
+        default: {
+          parentIssueRole: "orchestratorRole",
+          childIssueRole: "orchestratorRole",
+          reviewRole: "orchestratorRole",
+          ciFixRole: "orchestratorRole",
+        },
+      },
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"],
+          workflow: "default",
+        },
+      },
+    };
+
+    const sm = createSessionManager({
+      config: configWithModelProfiles,
+      registry: registryWithCodex,
+    });
+    await sm.spawnOrchestrator({ projectId: "my-app" });
+
+    const meta = readMetadata(sessionsDir, "app-orchestrator");
+    expect(meta).not.toBeNull();
+    expect(meta!.sessionId).toBe("app-orchestrator");
+    expect(meta!.projectId).toBe("my-app");
+    expect(meta!.role).toBe("orchestrator");
+    expect(meta!.agent).toBe("codex");
+    expect(meta!.provider).toBe("openai");
+    expect(meta!.authProfile).toBe("openaiApi");
+    expect(meta!.authMode).toBe("api-key");
+    expect(meta!.model).toBe("o3");
   });
 
   it("deletes previous OpenCode orchestrator sessions before starting", async () => {
@@ -3491,7 +4114,15 @@ describe("restore", () => {
       branch: "feat/TEST-1",
       status: "killed",
       project: "my-app",
+      projectId: "my-app",
+      role: "implementer",
+      agent: "codex",
+      provider: "openai",
+      authProfile: "openaiApi",
+      authMode: "api-key",
+      model: "o4-mini",
       issue: "TEST-1",
+      issueId: "TEST-1",
       pr: "https://github.com/org/my-app/pull/10",
       createdAt: "2025-01-01T00:00:00.000Z",
       runtimeHandle: JSON.stringify(makeHandle("rt-old")),
@@ -3516,7 +4147,15 @@ describe("restore", () => {
     const meta = readMetadataRaw(sessionsDir, "app-1");
     expect(meta).not.toBeNull();
     expect(meta!["issue"]).toBe("TEST-1");
+    expect(meta!["issueId"]).toBe("TEST-1");
     expect(meta!["pr"]).toBe("https://github.com/org/my-app/pull/10");
+    expect(meta!["projectId"]).toBe("my-app");
+    expect(meta!["role"]).toBe("implementer");
+    expect(meta!["agent"]).toBe("codex");
+    expect(meta!["provider"]).toBe("openai");
+    expect(meta!["authProfile"]).toBe("openaiApi");
+    expect(meta!["authMode"]).toBe("api-key");
+    expect(meta!["model"]).toBe("o4-mini");
   });
 
   it("restores from archive with multiple archived versions (picks latest)", async () => {

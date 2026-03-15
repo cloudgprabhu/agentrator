@@ -53,12 +53,16 @@ export function useSessionEvents(
   });
   const sessionsRef = useRef(state.sessions);
   const refreshingRef = useRef(false);
+  const signatureRef = useRef(
+    new Map<string, { runtimeVersion: string | null; workflowVersion: string | null }>(),
+  );
 
   useEffect(() => {
     sessionsRef.current = state.sessions;
   }, [state.sessions]);
 
   useEffect(() => {
+    signatureRef.current = new Map();
     dispatch({ type: "reset", sessions: initialSessions, globalPause: initialGlobalPause ?? null });
   }, [initialSessions, initialGlobalPause]);
 
@@ -78,8 +82,31 @@ export function useSessionEvents(
           const sameMembership =
             currentIds.size === snapshotIds.size &&
             [...snapshotIds].every((id) => currentIds.has(id));
+          const previousSignatures = signatureRef.current;
+          const hasPreviousSignatures = previousSignatures.size > 0;
+          const signaturesChanged =
+            hasPreviousSignatures &&
+            snapshot.sessions.some((session) => {
+              const previous = previousSignatures.get(session.id);
+              const runtimeVersion = session.runtimeVersion ?? null;
+              const workflowVersion = session.workflowVersion ?? null;
+              return (
+                !previous ||
+                previous.runtimeVersion !== runtimeVersion ||
+                previous.workflowVersion !== workflowVersion
+              );
+            });
+          const nextSignatures = new Map(
+            snapshot.sessions.map((session) => [
+              session.id,
+              {
+                runtimeVersion: session.runtimeVersion ?? null,
+                workflowVersion: session.workflowVersion ?? null,
+              },
+            ]),
+          );
 
-          if (!sameMembership && !refreshingRef.current) {
+          if ((!sameMembership || signaturesChanged) && !refreshingRef.current) {
             refreshingRef.current = true;
             const sessionsUrl = project
               ? `/api/sessions?project=${encodeURIComponent(project)}`
@@ -91,6 +118,7 @@ export function useSessionEvents(
                   updated: { sessions?: DashboardSession[]; globalPause?: GlobalPauseState } | null,
                 ) => {
                   if (updated?.sessions) {
+                    signatureRef.current = nextSignatures;
                     dispatch({
                       type: "reset",
                       sessions: updated.sessions,
@@ -103,6 +131,8 @@ export function useSessionEvents(
               .finally(() => {
                 refreshingRef.current = false;
               });
+          } else {
+            signatureRef.current = nextSignatures;
           }
         }
       } catch {

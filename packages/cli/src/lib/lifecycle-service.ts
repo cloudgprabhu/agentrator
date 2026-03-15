@@ -28,7 +28,7 @@ function getProjectBase(config: OrchestratorConfig, projectId: string): string {
   if (!project) {
     throw new Error(`Unknown project: ${projectId}`);
   }
-  return getProjectBaseDir(config.configPath, project.path);
+  return getProjectBaseDir(config.configPath, projectId);
 }
 
 export function getLifecyclePidFile(config: OrchestratorConfig, projectId: string): string {
@@ -142,7 +142,7 @@ function resolveLifecycleWorkerLaunch(projectId: string): { command: string; arg
   }
 
   return {
-    command: "ao",
+    command: entry ?? "aom",
     args: workerArgs,
   };
 }

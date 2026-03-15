@@ -383,5 +383,143 @@ describe("useSessionEvents", () => {
       expect(result.current.sessions).toHaveLength(1);
       expect(result.current.sessions[0].id).toBe("session-0");
     });
+
+    it("refreshes enriched sessions when runtime or workflow signatures change", async () => {
+      const sessions = makeSessions(1);
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sessions: [
+            makeSession({
+              id: "session-0",
+              runtime: {
+                role: "reviewer",
+                agent: "codex",
+                provider: "openai",
+                model: "gpt-5",
+                authProfile: "openai-browser",
+                authMode: "browser-account",
+                promptPolicy: {
+                  rulesFiles: [".ao/reviewer-rules.md"],
+                  promptPrefix: "Review carefully",
+                  guardrails: ["Flag migration risk"],
+                  source: "metadata",
+                },
+              },
+              workflow: {
+                relationship: "child",
+                relationshipLabel: "child of INT-42",
+                state: "waiting_review",
+                lineagePath: "docs/plans/int-42.lineage.yaml",
+                taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+                parent: {
+                  issueId: "INT-42",
+                  issueUrl: null,
+                  issueLabel: "INT-42",
+                  issueTitle: null,
+                  childCount: 1,
+                },
+                currentChild: null,
+                children: [],
+                linkage: null,
+                latestEvent: null,
+              },
+            }),
+          ],
+          globalPause: null,
+        }),
+      } as Response);
+
+      const { result } = renderHook(() => useSessionEvents(sessions, null));
+
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: [
+              {
+                id: "session-0",
+                status: "working",
+                activity: "active",
+                lastActivityAt: new Date().toISOString(),
+                runtimeVersion: "runtime-v1",
+                workflowVersion: "workflow-v1",
+              },
+            ],
+          }),
+        } as MessageEvent);
+      });
+
+      expect(fetch).not.toHaveBeenCalled();
+
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: [
+              {
+                id: "session-0",
+                status: "working",
+                activity: "active",
+                lastActivityAt: new Date().toISOString(),
+                runtimeVersion: "runtime-v2",
+                workflowVersion: "workflow-v2",
+              },
+            ],
+          }),
+        } as MessageEvent);
+
+        await Promise.resolve();
+      });
+
+      expect(fetch).toHaveBeenCalledWith("/api/sessions");
+      expect(result.current.sessions[0]?.runtime?.promptPolicy?.promptPrefix).toBe("Review carefully");
+      expect(result.current.sessions[0]?.workflow?.state).toBe("waiting_review");
+    });
+
+    it("does not refetch when runtime and workflow signatures remain stable", async () => {
+      const sessions = makeSessions(1);
+      const { result } = renderHook(() => useSessionEvents(sessions, null));
+
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: [
+              {
+                id: "session-0",
+                status: "working",
+                activity: "active",
+                lastActivityAt: new Date().toISOString(),
+                runtimeVersion: "runtime-stable",
+                workflowVersion: "workflow-stable",
+              },
+            ],
+          }),
+        } as MessageEvent);
+      });
+
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: [
+              {
+                id: "session-0",
+                status: "working",
+                activity: "active",
+                lastActivityAt: new Date().toISOString(),
+                runtimeVersion: "runtime-stable",
+                workflowVersion: "workflow-stable",
+              },
+            ],
+          }),
+        } as MessageEvent);
+      });
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(result.current.sessions[0]?.id).toBe("session-0");
+    });
   });
 });

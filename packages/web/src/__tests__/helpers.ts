@@ -17,6 +17,16 @@ export function makeSession(overrides: Partial<DashboardSession> = {}): Dashboar
     lastActivityAt: new Date().toISOString(),
     pr: null,
     metadata: {},
+    runtime: {
+      role: null,
+      agent: null,
+      provider: null,
+      model: null,
+      authProfile: null,
+      authMode: null,
+      promptPolicy: null,
+    },
+    workflow: null,
     ...overrides,
   };
 }

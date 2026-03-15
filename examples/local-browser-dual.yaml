@@ -1,0 +1,80 @@
+# Local personal setup with browser auth for both Claude and Codex.
+# Use this when you want to switch roles between Anthropic and OpenAI
+# without storing API keys in the config file.
+
+defaults:
+  runtime: tmux
+  agent: claude-code
+  workspace: worktree
+  notifiers: [desktop]
+
+providers:
+  anthropic:
+    kind: anthropic
+    capabilities:
+      browserAuth: true
+  openai:
+    kind: openai
+    capabilities:
+      browserAuth: true
+
+authProfiles:
+  claude-browser:
+    type: browser-account
+    provider: anthropic
+    accountType: claude-pro
+
+  codex-browser:
+    type: browser-account
+    provider: openai
+    accountType: chatgpt-plus
+
+modelProfiles:
+  planner-openai:
+    provider: openai
+    agent: codex
+    authProfile: codex-browser
+    model: o3
+
+  implementer-anthropic:
+    provider: anthropic
+    agent: claude-code
+    authProfile: claude-browser
+    model: claude-sonnet-4-20250514
+    promptPrefix: "Keep changes small and keep the repo working."
+
+  reviewer-openai:
+    provider: openai
+    agent: codex
+    authProfile: codex-browser
+    model: o4-mini
+
+roles:
+  planner:
+    modelProfile: planner-openai
+
+  implementer:
+    modelProfile: implementer-anthropic
+    guardrails:
+      - "Run tests before pushing"
+
+  reviewer:
+    modelProfile: reviewer-openai
+
+workflow:
+  default:
+    parentIssueRole: planner
+    childIssueRole: implementer
+    reviewRole: reviewer
+    ciFixRole: implementer
+
+projects:
+  my-app:
+    name: My App
+    repo: org/my-app
+    path: ~/src/my-app
+    defaultBranch: main
+    sessionPrefix: app
+    tracker:
+      plugin: github
+    workflow: default

@@ -1,0 +1,84 @@
+# Mixed local browser + API-key setup.
+# Use this when planning/review should use a local browser-auth account
+# but implementation should run against a stable API-key backed model.
+
+defaults:
+  runtime: tmux
+  agent: claude-code
+  workspace: worktree
+  notifiers: [desktop]
+
+providers:
+  anthropic:
+    kind: anthropic
+    capabilities:
+      browserAuth: true
+      apiAuth: true
+  openai:
+    kind: openai
+    capabilities:
+      browserAuth: true
+      apiAuth: true
+
+authProfiles:
+  claude-browser:
+    type: browser-account
+    provider: anthropic
+    accountType: claude-pro
+
+  openai-api:
+    type: api-key
+    provider: openai
+    credentialEnvVar: OPENAI_API_KEY
+
+modelProfiles:
+  planner-model:
+    provider: anthropic
+    agent: claude-code
+    authProfile: claude-browser
+    model: claude-sonnet-4-20250514
+
+  implementer-model:
+    provider: openai
+    agent: codex
+    authProfile: openai-api
+    model: o4-mini
+    runtime:
+      reasoningEffort: medium
+
+  reviewer-model:
+    provider: anthropic
+    agent: claude-code
+    authProfile: claude-browser
+    model: claude-sonnet-4-20250514
+
+roles:
+  planner:
+    modelProfile: planner-model
+
+  implementer:
+    modelProfile: implementer-model
+    guardrails:
+      - "Keep changes reviewable"
+      - "Do not commit generated secrets"
+
+  reviewer:
+    modelProfile: reviewer-model
+
+workflow:
+  default:
+    parentIssueRole: planner
+    childIssueRole: implementer
+    reviewRole: reviewer
+    ciFixRole: implementer
+
+projects:
+  my-app:
+    name: My App
+    repo: org/my-app
+    path: ~/src/my-app
+    defaultBranch: main
+    sessionPrefix: app
+    tracker:
+      plugin: github
+    workflow: default

@@ -1,113 +1,96 @@
 # Agent Orchestrator Config Examples
 
-This directory contains example configurations for common use cases.
+This directory now includes both the older upstream-style examples and fork-specific examples for provider/auth/role/workflow setups.
 
 ## Quick Start
 
 Copy an example and customize:
 
 ```bash
-cp examples/simple-github.yaml agent-orchestrator.yaml
-nano agent-orchestrator.yaml  # edit as needed
-ao spawn my-app ISSUE-123
+cp examples/local-browser-dual.yaml agent-orchestrator.yaml
+ao auth status
+ao start my-app
+ao status --verbose
 ```
 
-## Examples
+## Fork-specific examples
+
+### [local-browser-dual.yaml](./local-browser-dual.yaml)
+
+Short note: local personal setup with both Claude browser auth and Codex browser auth.
+
+Use this if:
+
+- you want local interactive login only
+- planner/reviewer and implementer roles should switch providers
+- you do not want API keys in the config file
+
+### [mixed-local-api.yaml](./mixed-local-api.yaml)
+
+Short note: mixed browser-auth plus API-key setup.
+
+Use this if:
+
+- planning or review should run with a local browser-auth account
+- implementation should use a stable API-key-backed model
+- you want role-based separation between local and automated credentials
+
+### [team-api-cloud.yaml](./team-api-cloud.yaml)
+
+Short note: team-oriented setup using API-key and cloud auth only.
+
+Use this if:
+
+- browser login is not appropriate for your environment
+- your team runs on env-managed credentials or shared AWS profiles
+- you want Linear tracking and Slack notifications in the same example
+
+### [shared-repo-multi-project.yaml](./shared-repo-multi-project.yaml)
+
+Short note: multiple logical AO projects sharing the same repository path.
+
+Use this if:
+
+- planner, implementer, and reviewer need distinct AO project IDs
+- several logical projects point at one repo path
+- you want to test canonical project identity instead of path-derived identity
+
+## Existing examples
 
 ### [simple-github.yaml](./simple-github.yaml)
 
-**Minimal setup with GitHub Issues**
-
-Perfect for getting started. Just specify your repo and you're ready to spawn agents.
-
-Use this if:
-
-- You're working on a single GitHub repository
-- You want to use GitHub Issues for task tracking
-- You want the simplest possible setup
+Short note: minimal legacy-compatible single-project GitHub setup.
 
 ### [linear-team.yaml](./linear-team.yaml)
 
-**Linear integration**
-
-Integrates with Linear for issue tracking. Requires `LINEAR_API_KEY` environment variable.
-
-Use this if:
-
-- Your team uses Linear for project management
-- You want agents to update Linear ticket status
-- You need custom agent rules per project
+Short note: lightweight Linear-only example without the full fork workflow schema.
 
 ### [multi-project.yaml](./multi-project.yaml)
 
-**Multiple repos with different trackers**
-
-Shows how to manage multiple projects with different trackers and notification routing.
-
-Use this if:
-
-- You're managing multiple repositories
-- Different projects use different trackers (GitHub Issues vs Linear)
-- You want Slack notifications in addition to desktop
-- You need different rules per project
+Short note: multiple repositories with different trackers and notification routing.
 
 ### [auto-merge.yaml](./auto-merge.yaml)
 
-**Aggressive automation with auto-merge**
-
-Automatically merges approved PRs with passing CI. Auto-retries CI failures and review comments.
-
-Use this if:
-
-- You trust your agents and CI pipeline
-- You want maximum automation
-- You want agents to handle routine failures autonomously
-- You want escalation only when agents get stuck
+Short note: aggressive automation example centered on reactions and merge handling.
 
 ### [codex-integration.yaml](./codex-integration.yaml)
 
-**Using Codex instead of Claude Code**
+Short note: older example focused on selecting Codex as the agent plugin.
 
-Shows how to use a different AI agent (Codex) instead of the default Claude Code.
-
-Use this if:
-
-- You prefer GPT-4/Codex over Claude
-- You need agent-specific configuration
-- You're evaluating different AI coding assistants
-
-## Configuration Tips
-
-1. **Start simple** - Use `simple-github.yaml` as a starting point
-2. **Add complexity incrementally** - Enable features as you need them
-3. **Test with one project first** - Get comfortable before adding multiple projects
-4. **Review defaults** - Most sensible defaults are already configured
-5. **Use environment variables** - Store API keys in env vars, not config files
-
-## Environment Variables
-
-These environment variables are commonly used:
+## Common environment variables
 
 ```bash
-# Linear integration
-export LINEAR_API_KEY="lin_api_..."
-
-# Slack notifications
+export OPENAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+export LINEAR_API_KEY="..."
 export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
-
-# GitHub (usually set by gh CLI)
-# export GITHUB_TOKEN="ghp_..."
 ```
-
-Add these to your shell profile (`~/.zshrc` or `~/.bashrc`) to persist them.
 
 ## Next Steps
 
 After copying an example:
 
-1. **Edit the config** - Update repo paths, team IDs, etc.
-2. **Validate** - Run `ao start` to check for config errors
-3. **Spawn an agent** - Try `ao spawn project-id ISSUE-123`
-4. **Monitor** - Use `ao status` or open the dashboard (default http://localhost:3000, configurable via `port:` in config)
-
-See [SETUP.md](../SETUP.md) for detailed configuration reference and troubleshooting.
+1. Update repo paths, session prefixes, and tracker settings.
+2. Run `ao auth status` to confirm the selected auth profiles are usable.
+3. Run `ao start <project>` or `ao workflow plan <project> <issue>`.
+4. Use `ao status --verbose` to confirm the resolved role, model, provider, and auth profile.

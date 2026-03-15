@@ -117,6 +117,59 @@ export {
 export { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 export { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 export type { NormalizedOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
+export {
+  migrateLegacyConfig,
+  migrateLegacyConfigFile,
+  getDefaultMigratedConfigPath,
+  relocateLegacySessionMetadata,
+} from "./config-migration.js";
+export type {
+  ConfigMigrationResult,
+  SessionMetadataRelocationProjectResult,
+  SessionMetadataRelocationSkippedEntry,
+  SessionMetadataRelocationResult,
+} from "./config-migration.js";
+export { resolveAuthProfile, hasInlineSecretValues } from "./auth-profile-resolver.js";
+export { createAuthManager } from "./auth-manager.js";
+export type { AuthManagerDeps } from "./auth-manager.js";
+export {
+  createAnthropicClaudeBrowserAuthAdapter,
+  formatAuthStatusForCli,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export type {
+  ClaudeCliCommandResult,
+  ClaudeCliRunner,
+  AnthropicClaudeBrowserAdapterOptions,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export {
+  createOpenAICodexBrowserAuthAdapter,
+  formatCodexAuthStatusForCli,
+} from "./auth-adapters/openai-codex-browser.js";
+export type {
+  CodexCliCommandResult,
+  CodexCliRunner,
+  OpenAICodexBrowserAdapterOptions,
+} from "./auth-adapters/openai-codex-browser.js";
+export {
+  createOpenAIApiKeyAuthAdapter,
+  createAnthropicApiKeyAuthAdapter,
+  createAWSBedrockProfileAuthAdapter,
+  createConsoleAuthHookAdapter,
+} from "./auth-adapters/non-browser-auth.js";
+export {
+  listSupportedProviders,
+  getProviderByKind,
+  isAgentCompatibleWithProvider,
+  isModelCompatibleWithProvider,
+  validateProviderCompatibility,
+} from "./provider-registry.js";
+export type { ProviderCapabilitiesMetadata, ProviderRegistryEntry } from "./provider-registry.js";
+export { resolveModelRuntimeConfig } from "./model-profile-resolution.js";
+export type {
+  NormalizedModelRuntimeSettings,
+  ResolvedModelRuntimeConfig,
+  ResolveModelRuntimeConfigOptions,
+} from "./model-profile-resolution.js";
 
 // Feedback tools — contracts, validation, and report storage
 export {
@@ -136,6 +189,62 @@ export type {
   FeedbackToolInput,
   PersistedFeedbackReport,
 } from "./feedback-tools.js";
+export {
+  TASK_PLAN_VERSION,
+  TaskPlanChildTaskSchema,
+  TaskPlanSchema,
+  validateTaskPlan,
+  parseTaskPlan,
+  readTaskPlanFile,
+  taskPlanToYaml,
+} from "./task-plan.js";
+export type { TaskPlanChildTask, TaskPlan, TaskPlanValidationOptions } from "./task-plan.js";
+export {
+  TASK_LINEAGE_VERSION,
+  TASK_LINEAGE_CHILD_STATES,
+  TaskLineageChildStateSchema,
+  TaskLineageSessionSchema,
+  TaskLineagePRSchema,
+  TaskLineageChildIssueSchema,
+  TaskLineageSchema,
+  validateTaskLineage,
+  parseTaskLineage,
+  readTaskLineageFile,
+  taskLineageToYaml,
+  writeTaskLineageFile,
+  findTaskLineageByParentIssue,
+  findTaskLineageByChildIssue,
+  findTaskLineageByChildOrPRRef,
+  findTaskLineageByPREvent,
+  findTaskLineageBySession,
+  auditTaskLineageFile,
+  upsertTaskLineagePlanningSession,
+  mergeTaskLineageChildIssues,
+  createTaskLineageSessionRef,
+  getAllowedTaskLineageChildStateTransitions,
+  canTransitionTaskLineageChildState,
+  summarizeTaskLineageStates,
+  recordTaskLineageChildSession,
+  recordTaskLineagePR,
+  transitionTaskLineageChildState,
+  updateTaskLineageTaskPlanPath,
+  parseTaskLineageChildState,
+} from "./task-lineage.js";
+export type {
+  TaskLineageAuditSeverity,
+  TaskLineageAuditFinding,
+  TaskLineageAuditOptions,
+  TaskLineageAuditResult,
+  TaskLineageParentMatch,
+  TaskLineageChildMatch,
+  TaskLineageSessionMatch,
+  TaskLineageChildOrPRMatch,
+  TaskLineageChildState,
+  TaskLineageSession,
+  TaskLineagePR,
+  TaskLineageChildIssue,
+  TaskLineage,
+} from "./task-lineage.js";
 
 // Path utilities — hash-based directory structure
 export {
@@ -175,44 +284,3 @@ export type {
   DetectedProjectInfo,
   GenerateConfigOptions,
 } from "./config-generator.js";
-
-// Config migration — migrate legacy config and relocate session metadata
-export {
-  getDefaultMigratedConfigPath,
-  migrateLegacyConfig,
-  migrateLegacyConfigFile,
-  relocateLegacySessionMetadata,
-} from "./config-migration.js";
-export type {
-  ConfigMigrationResult,
-  SessionMetadataRelocationProjectResult,
-  SessionMetadataRelocationSkippedEntry,
-  SessionMetadataRelocationResult,
-} from "./config-migration.js";
-
-// Auth profile management — adapters, manager, and resolver
-export { createAuthManager } from "./auth-manager.js";
-export type { AuthManagerDeps } from "./auth-manager.js";
-export { resolveAuthProfile, hasInlineSecretValues } from "./auth-profile-resolver.js";
-export {
-  createAnthropicClaudeBrowserAuthAdapter,
-} from "./auth-adapters/anthropic-claude-browser.js";
-export type {
-  ClaudeCliCommandResult,
-  ClaudeCliRunner,
-  AnthropicClaudeBrowserAdapterOptions,
-} from "./auth-adapters/anthropic-claude-browser.js";
-export {
-  createOpenAICodexBrowserAuthAdapter,
-} from "./auth-adapters/openai-codex-browser.js";
-export type {
-  CodexCliCommandResult,
-  CodexCliRunner,
-  OpenAICodexBrowserAdapterOptions,
-} from "./auth-adapters/openai-codex-browser.js";
-export {
-  createOpenAIApiKeyAuthAdapter,
-  createAnthropicApiKeyAuthAdapter,
-  createAWSBedrockProfileAuthAdapter,
-  createConsoleAuthHookAdapter,
-} from "./auth-adapters/non-browser-auth.js";

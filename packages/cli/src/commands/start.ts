@@ -233,7 +233,9 @@ async function startDashboard(
 ): Promise<ChildProcess> {
   const env = await buildDashboardEnv(port, configPath, terminalPort, directTerminalPort);
 
-  const child = spawn("pnpm", ["run", "dev"], {
+  const hasProdBuild = existsSync(resolve(webDir, ".next", "BUILD_ID"));
+  const script = hasProdBuild ? "start:all" : "dev";
+  const child = spawn("pnpm", ["run", script], {
     cwd: webDir,
     stdio: "inherit",
     detached: false,

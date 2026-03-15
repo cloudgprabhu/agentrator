@@ -1,0 +1,56 @@
+version: 1
+projectId: my-app
+parentIssue: INT-42
+taskPlanPath: docs/plans/int-42.task-plan.yaml
+trackerPlugin: github
+createdAt: 2026-03-13T12:00:00.000Z
+updatedAt: 2026-03-14T10:15:00.000Z
+planningSession:
+  sessionId: planner-1
+  role: planner
+  branch: feat/int-42-plan
+  worktreePath: /tmp/worktrees/planner-1
+  createdAt: 2026-03-13T12:00:00.000Z
+childIssues:
+  - taskIndex: 0
+    title: Define the task-plan schema in core
+    issueId: "101"
+    issueUrl: https://github.com/acme/repo/issues/101
+    issueLabel: "#101"
+    labels:
+      - workflow
+      - backend
+    dependencies: []
+    state: pr_opened
+    implementationSessions:
+      - sessionId: implementer-12
+        role: implementer
+        branch: feat/issue-101
+        worktreePath: /tmp/worktrees/implementer-12
+        createdAt: 2026-03-14T09:10:00.000Z
+    reviewSessions:
+      - sessionId: reviewer-4
+        role: reviewer
+        branch: feat/issue-101
+        worktreePath: /tmp/worktrees/reviewer-4
+        createdAt: 2026-03-14T10:00:00.000Z
+    pr:
+      number: 88
+      url: https://github.com/acme/repo/pull/88
+      branch: feat/issue-101
+      state: open
+      updatedAt: 2026-03-14T10:15:00.000Z
+  - taskIndex: 1
+    title: Add CLI task-plan validation
+    issueId: "102"
+    issueUrl: https://github.com/acme/repo/issues/102
+    issueLabel: "#102"
+    labels:
+      - workflow
+      - cli
+    dependencies:
+      - Define the task-plan schema in core
+    state: queued
+    implementationSessions: []
+    reviewSessions: []
+    pr: null

@@ -107,6 +107,16 @@ function parseStatusOutput(stdout: string, stderr: string): AuthStatusResult {
   return { status: "unavailable", message: "Unable to determine Codex auth status" };
 }
 
+function isCommandShapeError(stdout: string, stderr: string): boolean {
+  const normalized = `${normalizeText(stdout)}\n${normalizeText(stderr)}`;
+  return (
+    normalized.includes("unrecognized subcommand") ||
+    normalized.includes("unexpected argument") ||
+    normalized.includes("found argument") ||
+    normalized.includes("unknown command")
+  );
+}
+
 async function defaultCodexRunner(args: string[]): Promise<CodexCliCommandResult> {
   try {
     const { stdout, stderr } = await execFileAsync("codex", args, { timeout: 15_000 });
@@ -157,8 +167,29 @@ export function createOpenAICodexBrowserAuthAdapter(
   const isCi = options.isCi ?? process.env.CI === "true";
   const platform = options.platform ?? process.platform;
 
+  async function runWithFallback(commandSets: string[][]): Promise<CodexCliCommandResult> {
+    let lastResult: CodexCliCommandResult = { success: false, stdout: "", stderr: "" };
+
+    for (const args of commandSets) {
+      const result = await runCodexCli(args);
+      lastResult = result;
+      if (result.unavailable) {
+        return result;
+      }
+      if (!result.success && isCommandShapeError(result.stdout, result.stderr)) {
+        continue;
+      }
+      return result;
+    }
+
+    return lastResult;
+  }
+
   async function getStatus(): Promise<AuthStatusResult> {
-    const result = await runCodexCli(["auth", "status", "--json"]);
+    const result = await runWithFallback([
+      ["login", "status"],
+      ["auth", "status", "--json"],
+    ]);
     if (result.unavailable) {
       return { status: "unavailable", message: toSafeMessage("unavailable", "status check") };
     }
@@ -187,7 +218,7 @@ export function createOpenAICodexBrowserAuthAdapter(
       };
     }
 
-    const result = await runCodexCli(["auth", "login"]);
+    const result = await runWithFallback([["login"], ["auth", "login"]]);
     if (result.unavailable) {
       return { status: "unavailable", message: toSafeMessage("unavailable", "login") };
     }
@@ -198,7 +229,7 @@ export function createOpenAICodexBrowserAuthAdapter(
   }
 
   async function logout(): Promise<AuthStatusResult> {
-    const result = await runCodexCli(["auth", "logout"]);
+    const result = await runWithFallback([["logout"], ["auth", "logout"]]);
     if (result.unavailable) {
       return { status: "unavailable", message: toSafeMessage("unavailable", "logout") };
     }

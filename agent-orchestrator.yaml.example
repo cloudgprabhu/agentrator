@@ -22,6 +22,48 @@ defaults:
   workspace: worktree     # worktree | clone | copy
   notifiers: [desktop]    # desktop | slack | discord | webhook | email
 
+# Optional provider/auth/model/role/workflow profiles (new schema, backward-compatible)
+# providers:
+#   anthropic:
+#     kind: anthropic
+#     defaultAgentPlugin: claude-code
+#     capabilities:
+#       browserAuth: true
+#       apiAuth: true
+#
+# authProfiles:
+#   claude-browser:
+#     type: browser-account
+#     provider: anthropic
+#     displayName: "Claude Pro Browser Login"
+#
+# modelProfiles:
+#   impl-default:
+#     agent: claude-code
+#     authProfile: claude-browser
+#     model: claude-sonnet-4-20250514
+#     rulesFile: .ao/model-rules.md
+#     promptPrefix: "Keep changes small and incremental."
+#     guardrails:
+#       - "Never commit secrets"
+#     runtime:
+#       reasoningEffort: medium
+#
+# roles:
+#   implementer:
+#     modelProfile: impl-default
+#     permissions: auto-edit
+#     rulesFile: .ao/implementer-rules.md
+#     promptPrefix: "Start by outlining a short implementation plan."
+#     guardrails: "Run tests before pushing"
+#
+# workflow:
+#   default:
+#     parentIssueRole: planner
+#     childIssueRole: implementer
+#     reviewRole: reviewer
+#     ciFixRole: fixer
+
 # Projects — at minimum, specify repo and path
 projects:
   my-app:
@@ -73,6 +115,9 @@ projects:
 
     # OpenCode issue session strategy (only for agent: opencode)
     # opencodeIssueSessionStrategy: reuse   # reuse | delete | ignore
+
+    # Optional workflow mapping key (references top-level workflow map)
+    # workflow: default
 
     # Per-project reaction overrides
     # reactions:

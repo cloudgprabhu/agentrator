@@ -229,8 +229,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return session.metadata["role"] === "orchestrator" || session.id.endsWith("-orchestrator");
   }
 
-  function setProjectPause(project: _ProjectConfig, sourceSessionId: string, until: Date): void {
-    const sessionsDir = getSessionsDir(config.configPath, project.path);
+  function setProjectPause(
+    project: _ProjectConfig,
+    projectId: string,
+    sourceSessionId: string,
+    until: Date,
+  ): void {
+    const sessionsDir = getSessionsDir(config.configPath, projectId);
     const orchestratorId = `${project.sessionPrefix}-orchestrator`;
     const message = `Model rate limit detected from ${sourceSessionId}`;
     updateMetadata(sessionsDir, orchestratorId, {
@@ -240,8 +245,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     });
   }
 
-  function clearProjectPause(project: _ProjectConfig): void {
-    const sessionsDir = getSessionsDir(config.configPath, project.path);
+  function clearProjectPause(project: _ProjectConfig, projectId: string): void {
+    const sessionsDir = getSessionsDir(config.configPath, projectId);
     const orchestratorId = `${project.sessionPrefix}-orchestrator`;
     updateMetadata(sessionsDir, orchestratorId, {
       [GLOBAL_PAUSE_UNTIL_KEY]: "",
@@ -291,7 +296,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         }
       }
 
-      setProjectPause(project, session.id, resetAt);
+      setProjectPause(project, session.projectId, session.id, resetAt);
     } catch {
       return;
     }
@@ -366,7 +371,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // Persist PR URL so subsequent polls don't need to re-query.
           // Don't write status here — step 4 below will determine the
           // correct status (merged, ci_failed, etc.) on this same cycle.
-          const sessionsDir = getSessionsDir(config.configPath, project.path);
+          const sessionsDir = getSessionsDir(config.configPath, session.projectId);
           updateMetadata(sessionsDir, session.id, { pr: detectedPR.url });
         }
       } catch {
@@ -562,7 +567,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const project = config.projects[session.projectId];
     if (!project) return;
 
-    const sessionsDir = getSessionsDir(config.configPath, project.path);
+    const sessionsDir = getSessionsDir(config.configPath, session.projectId);
     updateMetadata(sessionsDir, session.id, updates);
 
     const cleaned = Object.fromEntries(
@@ -857,7 +862,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (until.getTime() <= Date.now()) {
           const project = config.projects[session.projectId];
           if (project) {
-            clearProjectPause(project);
+            clearProjectPause(project, session.projectId);
           }
           continue;
         }

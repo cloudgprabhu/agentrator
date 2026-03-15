@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import {
+  normalizeMetadataRecord,
   readMetadata,
   readMetadataRaw,
   readArchivedMetadataRaw,
@@ -41,14 +42,21 @@ describe("writeMetadata + readMetadata", () => {
 
   it("writes and reads optional fields", () => {
     writeMetadata(dataDir, "app-2", {
+      sessionId: "app-2",
       worktree: "/tmp/w",
       branch: "main",
       status: "pr_open",
       issue: "https://linear.app/team/issue/INT-100",
+      issueId: "INT-100",
       pr: "https://github.com/org/repo/pull/42",
       prAutoDetect: "off",
       summary: "Implementing feature X",
       project: "my-app",
+      projectId: "my-app",
+      provider: "openai",
+      authProfile: "openaiApi",
+      authMode: "api-key",
+      model: "o4-mini",
       createdAt: "2025-01-01T00:00:00.000Z",
       runtimeHandle: '{"id":"tmux-1","runtimeName":"tmux"}',
     });
@@ -56,12 +64,39 @@ describe("writeMetadata + readMetadata", () => {
     const meta = readMetadata(dataDir, "app-2");
     expect(meta).not.toBeNull();
     expect(meta!.issue).toBe("https://linear.app/team/issue/INT-100");
+    expect(meta!.issueId).toBe("INT-100");
     expect(meta!.pr).toBe("https://github.com/org/repo/pull/42");
     expect(meta!.prAutoDetect).toBe("off");
     expect(meta!.summary).toBe("Implementing feature X");
     expect(meta!.project).toBe("my-app");
+    expect(meta!.projectId).toBe("my-app");
+    expect(meta!.provider).toBe("openai");
+    expect(meta!.authProfile).toBe("openaiApi");
+    expect(meta!.authMode).toBe("api-key");
+    expect(meta!.model).toBe("o4-mini");
     expect(meta!.createdAt).toBe("2025-01-01T00:00:00.000Z");
     expect(meta!.runtimeHandle).toBe('{"id":"tmux-1","runtimeName":"tmux"}');
+  });
+
+  it("reads canonical keys with legacy fallback", () => {
+    writeFileSync(
+      join(dataDir, "app-compat"),
+      [
+        "worktree=/tmp/w",
+        "branch=main",
+        "status=working",
+        "projectId=my-app",
+        "issueId=INT-777",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const meta = readMetadata(dataDir, "app-compat");
+    expect(meta).not.toBeNull();
+    expect(meta!.projectId).toBe("my-app");
+    expect(meta!.project).toBe("my-app");
+    expect(meta!.issueId).toBe("INT-777");
+    expect(meta!.issue).toBe("INT-777");
   });
 
   it("returns null for nonexistent session", () => {
@@ -322,6 +357,40 @@ describe("readArchivedMetadataRaw", () => {
     expect(archived).not.toBeNull();
     expect(archived!["branch"]).toBe("feat/test");
     expect(archived!["issue"]).toBe("TEST-1");
+  });
+
+  it("normalizes canonical aliases from legacy archive keys", () => {
+    const archiveDir = join(dataDir, "archive");
+    mkdirSync(archiveDir, { recursive: true });
+
+    writeFileSync(
+      join(archiveDir, "app-1_2026-01-01T00-00-00-000Z"),
+      [
+        "branch=feat/test",
+        "status=killed",
+        "project=my-app",
+        "issue=INT-42",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const archived = readArchivedMetadataRaw(dataDir, "app-1");
+    expect(archived).not.toBeNull();
+    expect(archived!["project"]).toBe("my-app");
+    expect(archived!["projectId"]).toBe("my-app");
+    expect(archived!["issue"]).toBe("INT-42");
+    expect(archived!["issueId"]).toBe("INT-42");
+  });
+});
+
+describe("normalizeMetadataRecord", () => {
+  it("adds canonical aliases for project and issue keys", () => {
+    expect(normalizeMetadataRecord({ project: "my-app", issue: "INT-42" })).toEqual({
+      project: "my-app",
+      projectId: "my-app",
+      issue: "INT-42",
+      issueId: "INT-42",
+    });
   });
 });
 

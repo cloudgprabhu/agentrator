@@ -19,6 +19,14 @@
       "types": "./dist/utils.d.ts",
       "import": "./dist/utils.js"
     },
+    "./task-plan": {
+      "types": "./dist/task-plan.d.ts",
+      "import": "./dist/task-plan.js"
+    },
+    "./task-lineage": {
+      "types": "./dist/task-lineage.d.ts",
+      "import": "./dist/task-lineage.js"
+    },
     "./scm-webhook-utils": {
       "types": "./dist/scm-webhook-utils.d.ts",
       "import": "./dist/scm-webhook-utils.js"

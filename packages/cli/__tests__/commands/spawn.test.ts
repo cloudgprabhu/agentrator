@@ -68,7 +68,7 @@ let tmpDir: string;
 let configPath: string;
 
 import { Command } from "commander";
-import { registerSpawn } from "../../src/commands/spawn.js";
+import { registerSpawn, registerSpawnRole } from "../../src/commands/spawn.js";
 
 let program: Command;
 let consoleSpy: ReturnType<typeof vi.spyOn>;
@@ -106,6 +106,7 @@ beforeEach(() => {
   program = new Command();
   program.exitOverride();
   registerSpawn(program);
+  registerSpawnRole(program);
   consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation((code) => {
@@ -135,6 +136,183 @@ afterEach(() => {
 });
 
 describe("spawn command", () => {
+  it("spawns from a legacy single-agent config without role/provider schema", async () => {
+    mockConfigRef.current = {
+      configPath,
+      port: 3000,
+      defaults: {
+        runtime: "tmux",
+        agent: "claude-code",
+        workspace: "worktree",
+        notifiers: ["desktop"],
+      },
+      projects: {
+        "my-app": {
+          repo: "org/my-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    } as Record<string, unknown>;
+
+    const fakeSession: Session = {
+      id: "my--1",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-100",
+      issueId: "INT-100",
+      pr: null,
+      workspacePath: "/tmp/worktrees/my--1",
+      runtimeHandle: { id: "hash-my--1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync(["node", "test", "spawn", "my-app", "INT-100"]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "my-app",
+      issueId: "INT-100",
+    });
+  });
+
+  it("resolves the requested logical project key when projects share the same repo path", async () => {
+    mockConfigRef.current = {
+      configPath,
+      port: 3000,
+      defaults: {
+        runtime: "tmux",
+        agent: "claude-code",
+        workspace: "worktree",
+        notifiers: ["desktop"],
+      },
+      projects: {
+        planner: {
+          name: "Planner",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "pla",
+        },
+        implementer: {
+          name: "Implementer",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "imp",
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    } as Record<string, unknown>;
+
+    const fakeSession: Session = {
+      id: "pla-1",
+      projectId: "planner",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-101",
+      issueId: "INT-101",
+      pr: null,
+      workspacePath: "/tmp/worktrees/pla-1",
+      runtimeHandle: { id: "hash-pla-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync(["node", "test", "spawn", "planner", "INT-101"]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "planner",
+      issueId: "INT-101",
+    });
+  });
+
+  it("keeps project selection stable when shared-path projects also use explicit roles", async () => {
+    mockConfigRef.current = {
+      configPath,
+      port: 3000,
+      defaults: {
+        runtime: "tmux",
+        agent: "claude-code",
+        workspace: "worktree",
+        notifiers: ["desktop"],
+      },
+      roles: {
+        planner: { modelProfile: "planner-model" },
+        implementer: { modelProfile: "implementer-model" },
+      },
+      modelProfiles: {
+        "planner-model": { model: "o4-mini" },
+        "implementer-model": { model: "o4-mini" },
+      },
+      projects: {
+        planner: {
+          name: "Planner",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "pla",
+        },
+        implementer: {
+          name: "Implementer",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "imp",
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    } as Record<string, unknown>;
+
+    const fakeSession: Session = {
+      id: "pla-2",
+      projectId: "planner",
+      status: "spawning",
+      activity: null,
+      branch: "feat/PLAN-202",
+      issueId: "PLAN-202",
+      pr: null,
+      workspacePath: "/tmp/worktrees/pla-2",
+      runtimeHandle: { id: "hash-pla-2", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "spawn",
+      "planner",
+      "PLAN-202",
+      "--role",
+      "planner",
+    ]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "planner",
+      issueId: "PLAN-202",
+      agent: undefined,
+      role: "planner",
+    });
+  });
+
   it("delegates to sessionManager.spawn() instead of creating tmux sessions directly", async () => {
     // This is the core regression test: spawn must delegate to sm.spawn(),
     // not manually create tmux sessions with flat naming (which broke after
@@ -309,6 +487,141 @@ describe("spawn command", () => {
       projectId: "my-app",
       issueId: "INT-42",
       agent: "codex",
+    });
+  });
+
+  it("passes --role flag to sessionManager.spawn()", async () => {
+    const fakeSession: Session = {
+      id: "app-1",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-42",
+      issueId: "INT-42",
+      pr: null,
+      workspacePath: "/tmp/wt",
+      runtimeHandle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync(["node", "test", "spawn", "my-app", "INT-42", "--role", "planner"]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "my-app",
+      issueId: "INT-42",
+      agent: undefined,
+      role: "planner",
+    });
+  });
+
+  it("forwards both --role and --agent so core can apply precedence", async () => {
+    const fakeSession: Session = {
+      id: "app-1",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-42",
+      issueId: "INT-42",
+      pr: null,
+      workspacePath: "/tmp/wt",
+      runtimeHandle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "spawn",
+      "my-app",
+      "INT-42",
+      "--role",
+      "planner",
+      "--agent",
+      "codex",
+    ]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "my-app",
+      issueId: "INT-42",
+      agent: "codex",
+      role: "planner",
+    });
+  });
+
+  it("supports spawn-role command alias", async () => {
+    const fakeSession: Session = {
+      id: "app-1",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-42",
+      issueId: "INT-42",
+      pr: null,
+      workspacePath: "/tmp/wt",
+      runtimeHandle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync(["node", "test", "spawn-role", "my-app", "planner", "INT-42"]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "my-app",
+      issueId: "INT-42",
+      agent: undefined,
+      role: "planner",
+    });
+  });
+
+  it("forwards --agent with spawn-role so core can apply precedence", async () => {
+    const fakeSession: Session = {
+      id: "app-1",
+      projectId: "my-app",
+      status: "spawning",
+      activity: null,
+      branch: "feat/INT-42",
+      issueId: "INT-42",
+      pr: null,
+      workspacePath: "/tmp/wt",
+      runtimeHandle: { id: "hash-app-1", runtimeName: "tmux", data: {} },
+      agentInfo: null,
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      metadata: {},
+    };
+
+    mockSessionManager.spawn.mockResolvedValue(fakeSession);
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "spawn-role",
+      "my-app",
+      "planner",
+      "INT-42",
+      "--agent",
+      "codex",
+    ]);
+
+    expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+      projectId: "my-app",
+      issueId: "INT-42",
+      agent: "codex",
+      role: "planner",
     });
   });
 

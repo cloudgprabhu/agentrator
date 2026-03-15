@@ -3,9 +3,18 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { CIBadge, CICheckList } from "@/components/CIBadge";
 import { PRStatus } from "@/components/PRStatus";
 import { SessionCard } from "@/components/SessionCard";
+import { SessionDetail } from "@/components/SessionDetail";
 import { AttentionZone } from "@/components/AttentionZone";
 import { ActivityDot } from "@/components/ActivityDot";
 import { makeSession, makePR } from "./helpers";
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock("@/components/DirectTerminal", () => ({
+  DirectTerminal: () => <div data-testid="direct-terminal">terminal</div>,
+}));
 
 // ── ActivityDot ───────────────────────────────────────────────────────
 
@@ -430,6 +439,186 @@ describe("SessionCard", () => {
     const { container } = render(<SessionCard session={session} />);
     fireEvent.click(container.firstElementChild!);
     expect(screen.getByText("terminate")).toBeInTheDocument();
+  });
+
+  it("renders runtime and workflow badges", () => {
+    const session = makeSession({
+      runtime: {
+        role: "implementer",
+        agent: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+      },
+      workflow: {
+        relationship: "child",
+        relationshipLabel: "child of INT-42",
+        state: "waiting_review",
+        lineagePath: "docs/plans/int-42.lineage.yaml",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        parent: {
+          issueId: "INT-42",
+          issueUrl: "https://linear.app/test/INT-42",
+          issueLabel: "INT-42",
+          issueTitle: "Ship workflow dashboard",
+          childCount: 2,
+        },
+        currentChild: {
+          taskIndex: 0,
+          title: "Build dashboard",
+          issueId: "INT-101",
+          issueUrl: "https://linear.app/test/INT-101",
+          issueLabel: "INT-101",
+          state: "waiting_review",
+          isCurrent: true,
+          hasPR: true,
+          prUrl: "https://github.com/acme/app/pull/101",
+          prNumber: 101,
+          implementationSessionCount: 1,
+          reviewSessionCount: 1,
+        },
+        children: [
+          {
+            taskIndex: 0,
+            title: "Build dashboard",
+            issueId: "INT-101",
+            issueUrl: "https://linear.app/test/INT-101",
+            issueLabel: "INT-101",
+            state: "waiting_review",
+            isCurrent: true,
+            hasPR: true,
+            prUrl: "https://github.com/acme/app/pull/101",
+            prNumber: 101,
+            implementationSessionCount: 1,
+            reviewSessionCount: 1,
+          },
+        ],
+        linkage: {
+          prUrl: "https://github.com/acme/app/pull/101",
+          prNumber: 101,
+          prState: "open",
+          reviewSessionIds: ["review-1"],
+          implementationSessionIds: ["impl-1"],
+        },
+        latestEvent: {
+          label: "PR updated",
+          at: "2026-03-14T12:00:00.000Z",
+          description: "PR #101 · open",
+        },
+      },
+    });
+
+    render(<SessionCard session={session} />);
+
+    expect(screen.getByText("implementer")).toBeInTheDocument();
+    expect(screen.getByText("codex")).toBeInTheDocument();
+    expect(screen.getByText("waiting_review")).toBeInTheDocument();
+    expect(screen.getByText("child of INT-42")).toBeInTheDocument();
+  });
+});
+
+describe("SessionDetail", () => {
+  it("renders workflow summary, linkage, and latest activity", () => {
+    const session = makeSession({
+      runtime: {
+        role: "reviewer",
+        agent: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+        promptPolicy: {
+          rulesFiles: [".ao/model-rules.md", ".ao/reviewer-rules.md"],
+          promptPrefix: "Review from the user-impact perspective.",
+          guardrails: ["Do not approve flaky tests", "Flag migration risk"],
+          source: "metadata",
+        },
+      },
+      workflow: {
+        relationship: "child",
+        relationshipLabel: "child of INT-42",
+        state: "waiting_review",
+        lineagePath: "docs/plans/int-42.lineage.yaml",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        parent: {
+          issueId: "INT-42",
+          issueUrl: "https://linear.app/test/INT-42",
+          issueLabel: "INT-42",
+          issueTitle: "Ship workflow dashboard",
+          childCount: 2,
+        },
+        currentChild: {
+          taskIndex: 0,
+          title: "Build dashboard",
+          issueId: "INT-101",
+          issueUrl: "https://linear.app/test/INT-101",
+          issueLabel: "INT-101",
+          state: "waiting_review",
+          isCurrent: true,
+          hasPR: true,
+          prUrl: "https://github.com/acme/app/pull/101",
+          prNumber: 101,
+          implementationSessionCount: 1,
+          reviewSessionCount: 1,
+        },
+        children: [
+          {
+            taskIndex: 0,
+            title: "Build dashboard",
+            issueId: "INT-101",
+            issueUrl: "https://linear.app/test/INT-101",
+            issueLabel: "INT-101",
+            state: "waiting_review",
+            isCurrent: true,
+            hasPR: true,
+            prUrl: "https://github.com/acme/app/pull/101",
+            prNumber: 101,
+            implementationSessionCount: 1,
+            reviewSessionCount: 1,
+          },
+          {
+            taskIndex: 1,
+            title: "Polish cards",
+            issueId: "INT-102",
+            issueUrl: "https://linear.app/test/INT-102",
+            issueLabel: "INT-102",
+            state: "queued",
+            isCurrent: false,
+            hasPR: false,
+            prUrl: null,
+            prNumber: null,
+            implementationSessionCount: 0,
+            reviewSessionCount: 0,
+          },
+        ],
+        linkage: {
+          prUrl: "https://github.com/acme/app/pull/101",
+          prNumber: 101,
+          prState: "open",
+          reviewSessionIds: ["review-1"],
+          implementationSessionIds: ["impl-1"],
+        },
+        latestEvent: {
+          label: "Review session started",
+          at: "2026-03-14T12:00:00.000Z",
+          description: "review-1",
+        },
+      },
+    });
+
+    render(<SessionDetail session={session} />);
+
+    expect(screen.getByText("Workflow")).toBeInTheDocument();
+    expect(screen.getByText(/Ship workflow dashboard/)).toBeInTheDocument();
+    expect(screen.getByText(/Build dashboard/)).toBeInTheDocument();
+    expect(screen.getByText(/implementation sessions: 1/)).toBeInTheDocument();
+    expect(screen.getByText("Review session started")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Policy")).toBeInTheDocument();
+    expect(screen.getByText(/Review from the user-impact perspective/)).toBeInTheDocument();
+    expect(screen.getByText(/\.ao\/model-rules\.md, \.ao\/reviewer-rules\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/Do not approve flaky tests \| Flag migration risk/)).toBeInTheDocument();
+    expect(screen.getByTestId("direct-terminal")).toBeInTheDocument();
   });
 });
 

@@ -176,6 +176,8 @@ export interface Session {
 export interface SessionSpawnConfig {
   projectId: string;
   issueId?: string;
+  /** Optional role key to resolve modelProfile/authProfile/provider/agent for this spawn */
+  role?: string;
   branch?: string;
   prompt?: string;
   /** Override the agent plugin for this session (e.g. "codex", "claude-code") */
@@ -505,6 +507,8 @@ export interface CreateIssueInput {
   labels?: string[];
   assignee?: string;
   priority?: number;
+  /** Optional parent/root issue identifier for trackers that support native hierarchy */
+  parentIssueId?: string;
 }
 
 // =============================================================================
@@ -580,6 +584,12 @@ export interface SCM {
 
   /** Get automated review comments (bots, linters, security scanners) */
   getAutomatedComments(pr: PRInfo): Promise<AutomatedComment[]>;
+
+  /** Publish a review outcome to the SCM-native PR/MR review surface, if supported. */
+  publishReview?(
+    pr: PRInfo,
+    review: SCMReviewSubmission,
+  ): Promise<void>;
 
   // --- Merge Readiness ---
 
@@ -699,6 +709,11 @@ export interface AutomatedComment {
   severity: "error" | "warning" | "info";
   createdAt: Date;
   url: string;
+}
+
+export interface SCMReviewSubmission {
+  outcome: "approve" | "request_changes" | "comment";
+  summary: string;
 }
 
 // --- Merge Readiness ---
@@ -903,6 +918,15 @@ export interface OrchestratorConfig {
   /** Authentication profile definitions */
   authProfiles?: Record<string, AuthProfileConfig>;
 
+  /** Model profile definitions */
+  modelProfiles?: Record<string, ModelProfileConfig>;
+
+  /** Role definitions mapped to model profiles */
+  roles?: Record<string, RoleConfig>;
+
+  /** Workflow role routing */
+  workflow?: Record<string, WorkflowConfig>;
+
   /** Notification channel configs */
   notifiers: Record<string, NotifierConfig>;
 
@@ -993,86 +1017,10 @@ export interface ProjectConfig {
     /** Require human approval before executing decomposed plans (default: true) */
     requireApproval: boolean;
   };
+
+  /** Optional workflow config key selecting top-level workflow mapping */
+  workflow?: string;
 }
-
-export interface TrackerConfig {
-  plugin: string;
-  /** Plugin-specific config (e.g. teamId for Linear) */
-  [key: string]: unknown;
-}
-
-export interface SCMConfig {
-  plugin: string;
-  webhook?: SCMWebhookConfig;
-  [key: string]: unknown;
-}
-
-export interface SCMWebhookConfig {
-  enabled?: boolean;
-  path?: string;
-  secretEnvVar?: string;
-  signatureHeader?: string;
-  eventHeader?: string;
-  deliveryHeader?: string;
-  maxBodyBytes?: number;
-}
-
-export interface NotifierConfig {
-  plugin: string;
-  [key: string]: unknown;
-}
-
-export interface AgentSpecificConfig {
-  permissions?: AgentPermissionMode;
-  model?: string;
-  orchestratorModel?: string;
-  [key: string]: unknown;
-}
-
-export interface OpenCodeAgentConfig extends AgentSpecificConfig {
-  opencodeSessionId?: string;
-}
-
-/**
- * Canonical cross-agent permission policy mode.
- *
- * Semantics:
- * - permissionless: run without interactive permission prompts (most permissive mode).
- * - default: use the agent's normal/default permission model.
- * - auto-edit: automatically approve edit actions where the agent supports granular approval policies.
- * - suggest: conservative mode that asks for approval on higher-risk/untrusted actions where supported.
- *
- * Note: Not every agent exposes all granular policies; plugins map these modes to
- * their closest supported behavior.
- */
-export type AgentPermissionMode = "permissionless" | "default" | "auto-edit" | "suggest";
-
-/** Backward-compatible legacy alias accepted in config parsing. */
-export type LegacyAgentPermissionMode = "skip";
-
-/** Raw permission input (supports legacy aliases). */
-export type AgentPermissionInput = AgentPermissionMode | LegacyAgentPermissionMode;
-
-/** Normalize legacy aliases to canonical permission modes. */
-export function normalizeAgentPermissionMode(
-  mode: string | undefined,
-): AgentPermissionMode | undefined {
-  if (!mode) return undefined;
-  if (
-    mode !== "permissionless" &&
-    mode !== "default" &&
-    mode !== "auto-edit" &&
-    mode !== "suggest"
-  ) {
-    if (mode === "skip") return "permissionless";
-    return undefined;
-  }
-  return mode;
-}
-
-// =============================================================================
-// AUTH SYSTEM
-// =============================================================================
 
 export type ProviderKind =
   | "anthropic"
@@ -1198,6 +1146,147 @@ export interface AuthManager {
   ): Promise<Record<string, AuthHealthCheckResult>>;
 }
 
+export interface ModelProfileConfig {
+  /** Optional provider key for this model profile */
+  provider?: string;
+  /** Optional explicit agent plugin */
+  agent?: string;
+  /** Optional auth profile key */
+  authProfile?: string;
+  /** Provider-native model ID */
+  model: string;
+  /** Optional runtime tuning knobs */
+  runtime?: Record<string, unknown>;
+  /** Optional rules file (relative to project path) to include in spawn prompt */
+  rulesFile?: string;
+  /** Optional role/model prompt prefix prepended to task instructions */
+  promptPrefix?: string;
+  /** Optional safety guardrails (string or list) appended to prompt */
+  guardrails?: string | string[];
+  /** Model-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface RoleConfig {
+  /** Optional description */
+  description?: string;
+  /** Required model profile key mapped to this role */
+  modelProfile: string;
+  /** Optional provider override */
+  provider?: string;
+  /** Optional auth profile override */
+  authProfile?: string;
+  /** Optional explicit agent plugin override */
+  agent?: string;
+  /** Optional rules file (relative to project path) to include in spawn prompt */
+  rulesFile?: string;
+  /** Optional role prompt prefix prepended to task instructions */
+  promptPrefix?: string;
+  /** Optional safety guardrails (string or list) appended to prompt */
+  guardrails?: string | string[];
+  /** Optional permission policy override */
+  permissions?: AgentPermissionMode;
+  /** Optional role-level prompt policy */
+  promptPolicy?: {
+    systemAppend?: string;
+    rulesFile?: string;
+    [key: string]: unknown;
+  };
+  /** Role-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface WorkflowConfig {
+  /** Role handling top-level parent issue orchestration */
+  parentIssueRole: string;
+  /** Role handling child issue implementation */
+  childIssueRole: string;
+  /** Role handling review cycles */
+  reviewRole: string;
+  /** Role handling CI-fix loops */
+  ciFixRole: string;
+  /** Workflow-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface TrackerConfig {
+  plugin: string;
+  /** Plugin-specific config (e.g. teamId for Linear) */
+  [key: string]: unknown;
+}
+
+export interface SCMConfig {
+  plugin: string;
+  webhook?: SCMWebhookConfig;
+  [key: string]: unknown;
+}
+
+export interface SCMWebhookConfig {
+  enabled?: boolean;
+  path?: string;
+  secretEnvVar?: string;
+  signatureHeader?: string;
+  eventHeader?: string;
+  deliveryHeader?: string;
+  maxBodyBytes?: number;
+}
+
+export interface NotifierConfig {
+  plugin: string;
+  [key: string]: unknown;
+}
+
+export interface AgentSpecificConfig {
+  permissions?: AgentPermissionMode;
+  model?: string;
+  orchestratorModel?: string;
+  [key: string]: unknown;
+}
+
+export interface OpenCodeAgentConfig extends AgentSpecificConfig {
+  opencodeSessionId?: string;
+}
+
+/**
+ * Canonical cross-agent permission policy mode.
+ *
+ * Semantics:
+ * - permissionless: run without interactive permission prompts (most permissive mode).
+ * - default: use the agent's normal/default permission model.
+ * - auto-edit: automatically approve edit actions where the agent supports granular approval policies.
+ * - suggest: conservative mode that asks for approval on higher-risk/untrusted actions where supported.
+ *
+ * Note: Not every agent exposes all granular policies; plugins map these modes to
+ * their closest supported behavior.
+ */
+export type AgentPermissionMode = "permissionless" | "default" | "auto-edit" | "suggest";
+
+/** Backward-compatible legacy alias accepted in config parsing. */
+export type LegacyAgentPermissionMode = "skip";
+
+/** Raw permission input (supports legacy aliases). */
+export type AgentPermissionInput = AgentPermissionMode | LegacyAgentPermissionMode;
+
+/** Normalize legacy aliases to canonical permission modes. */
+export function normalizeAgentPermissionMode(
+  mode: string | undefined,
+): AgentPermissionMode | undefined {
+  if (!mode) return undefined;
+  if (
+    mode !== "permissionless" &&
+    mode !== "default" &&
+    mode !== "auto-edit" &&
+    mode !== "suggest"
+  ) {
+    if (mode === "skip") return "permissionless";
+    return undefined;
+  }
+  return mode;
+}
+
 // =============================================================================
 // PLUGIN SYSTEM
 // =============================================================================
@@ -1246,16 +1335,26 @@ export interface PluginModule<T = unknown> {
  * (e.g., "a3b4c5d6e7f8-int-1").
  */
 export interface SessionMetadata {
+  sessionId?: string;
   worktree: string;
   branch: string;
   status: string;
   tmuxName?: string; // Globally unique tmux session name (includes hash)
   issue?: string;
+  issueId?: string;
   pr?: string;
   prAutoDetect?: "on" | "off";
   summary?: string;
   project?: string;
+  projectId?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
+  provider?: string;
+  authProfile?: string;
+  authMode?: AuthProfileType;
+  model?: string;
+  promptRulesFiles?: string;
+  promptPrefix?: string;
+  promptGuardrails?: string;
   createdAt?: string;
   runtimeHandle?: string;
   restoredAt?: string;

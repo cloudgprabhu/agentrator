@@ -79,6 +79,22 @@ function buildGitHubRepoUrl(pr: DashboardPR): string {
   return `https://github.com/${pr.owner}/${pr.repo}`;
 }
 
+function getWorkflowStateClassName(state: string): string {
+  switch (state) {
+    case "done":
+    case "approved":
+      return "border-[rgba(63,185,80,0.3)] bg-[rgba(63,185,80,0.12)] text-[var(--color-status-ready)]";
+    case "changes_requested":
+    case "blocked":
+      return "border-[rgba(248,81,73,0.3)] bg-[rgba(248,81,73,0.12)] text-[var(--color-status-error)]";
+    case "waiting_review":
+    case "pr_opened":
+      return "border-[rgba(210,153,34,0.3)] bg-[rgba(210,153,34,0.12)] text-[var(--color-status-attention)]";
+    default:
+      return "border-[rgba(88,166,255,0.3)] bg-[rgba(88,166,255,0.12)] text-[var(--color-accent)]";
+  }
+}
+
 async function askAgentToFix(
   sessionId: string,
   comment: { url: string; path: string; body: string },
@@ -215,6 +231,15 @@ export function SessionDetail({
   const reloadCommand = opencodeSessionId
     ? `/exit\nopencode --session ${opencodeSessionId}\n`
     : undefined;
+  const runtimeBadges = [
+    session.runtime?.role,
+    session.runtime?.agent,
+    session.runtime?.provider,
+    session.runtime?.model,
+    session.runtime?.authProfile,
+    session.runtime?.authMode,
+  ].filter((value): value is string => Boolean(value));
+  const promptPolicy = session.runtime?.promptPolicy;
 
   return (
     <div className="min-h-screen bg-[var(--color-bg-base)]">
@@ -367,6 +392,52 @@ export function SessionDetail({
                 )}
               </div>
 
+              {runtimeBadges.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  {runtimeBadges.map((badge) => (
+                    <span
+                      key={badge}
+                      className="rounded-[4px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]"
+                    >
+                      {badge}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {promptPolicy && (
+                <div className="mt-4 rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                      Prompt Policy
+                    </div>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+                      {promptPolicy.source === "metadata" ? "persisted" : "resolved from config"}
+                    </span>
+                  </div>
+                  <div className="space-y-2 text-[12px] text-[var(--color-text-secondary)]">
+                    <div>
+                      <span className="text-[var(--color-text-tertiary)]">rules:</span>{" "}
+                      {promptPolicy.rulesFiles.length > 0 ? (
+                        <span className="font-[var(--font-mono)]">
+                          {promptPolicy.rulesFiles.join(", ")}
+                        </span>
+                      ) : (
+                        <span>none</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-[var(--color-text-tertiary)]">prompt prefix:</span>{" "}
+                      {promptPolicy.promptPrefix ?? "none"}
+                    </div>
+                    <div>
+                      <span className="text-[var(--color-text-tertiary)]">guardrails:</span>{" "}
+                      {promptPolicy.guardrails.length > 0 ? promptPolicy.guardrails.join(" | ") : "none"}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <ClientTimestamps
                 status={session.status}
                 createdAt={session.createdAt}
@@ -379,8 +450,172 @@ export function SessionDetail({
         {/* ── PR Card ─────────────────────────────────────────────── */}
         {pr && <PRCard pr={pr} sessionId={session.id} />}
 
+        {session.workflow && (
+          <div className="mt-6 detail-card rounded-[8px] border border-[var(--color-border-default)] p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <div
+                className="h-3 w-0.5 rounded-full"
+                style={{ background: "var(--color-accent)", opacity: 0.8 }}
+              />
+              <span className="text-[10px] font-bold uppercase tracking-[0.10em] text-[var(--color-text-tertiary)]">
+                Workflow
+              </span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]">
+              <div className="space-y-4">
+                <div className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    Parent Issue
+                  </div>
+                  <div className="text-[13px] text-[var(--color-text-primary)]">
+                    {session.workflow.parent.issueUrl ? (
+                      <a
+                        href={session.workflow.parent.issueUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[var(--color-accent)] hover:underline"
+                      >
+                        {session.workflow.parent.issueLabel}
+                      </a>
+                    ) : (
+                      session.workflow.parent.issueLabel
+                    )}
+                    {session.workflow.parent.issueTitle && `: ${session.workflow.parent.issueTitle}`}
+                  </div>
+                  <div className="mt-2 text-[12px] text-[var(--color-text-tertiary)]">
+                    {session.workflow.relationshipLabel}
+                    {" · "}
+                    {session.workflow.parent.childCount} child issue
+                    {session.workflow.parent.childCount === 1 ? "" : "s"}
+                  </div>
+                </div>
+
+                <div className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    Child Issues
+                  </div>
+                  <div className="space-y-2">
+                    {session.workflow.children.map((child) => (
+                      <div
+                        key={child.issueId}
+                        className={cn(
+                          "flex items-start justify-between gap-3 rounded-[6px] border px-3 py-2",
+                          child.isCurrent
+                            ? "border-[rgba(88,166,255,0.35)] bg-[rgba(88,166,255,0.08)]"
+                            : "border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.02)]",
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                            <a
+                              href={child.issueUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[var(--color-accent)] hover:underline"
+                            >
+                              {child.issueLabel}
+                            </a>
+                            {" · "}
+                            {child.title}
+                          </div>
+                          <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">
+                            implement {child.implementationSessionCount} · review {child.reviewSessionCount}
+                            {child.prNumber !== null && ` · PR #${child.prNumber}`}
+                          </div>
+                        </div>
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                            getWorkflowStateClassName(child.state),
+                          )}
+                        >
+                          {child.state}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    Linkage
+                  </div>
+                  {session.workflow.linkage ? (
+                    <div className="space-y-2 text-[12px] text-[var(--color-text-secondary)]">
+                      <div>
+                        PR:{" "}
+                        {session.workflow.linkage.prUrl ? (
+                          <a
+                            href={session.workflow.linkage.prUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--color-accent)] hover:underline"
+                          >
+                            {session.workflow.linkage.prNumber
+                              ? `#${session.workflow.linkage.prNumber}`
+                              : session.workflow.linkage.prUrl}
+                          </a>
+                        ) : (
+                          <span>none</span>
+                        )}
+                        {session.workflow.linkage.prState && ` · ${session.workflow.linkage.prState}`}
+                      </div>
+                      <div>
+                        implementation sessions: {session.workflow.linkage.implementationSessionIds.length}
+                      </div>
+                      <div>review sessions: {session.workflow.linkage.reviewSessionIds.length}</div>
+                    </div>
+                  ) : (
+                    <div className="text-[12px] text-[var(--color-text-tertiary)]">
+                      No child-specific PR or review linkage for this session.
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    Latest Activity
+                  </div>
+                  {session.workflow.latestEvent ? (
+                    <div className="text-[12px] text-[var(--color-text-secondary)]">
+                      <div className="font-medium text-[var(--color-text-primary)]">
+                        {session.workflow.latestEvent.label}
+                      </div>
+                      {session.workflow.latestEvent.description && (
+                        <div className="mt-1">{session.workflow.latestEvent.description}</div>
+                      )}
+                      {session.workflow.latestEvent.at && (
+                        <div className="mt-1 text-[var(--color-text-tertiary)]">
+                          {relativeTime(session.workflow.latestEvent.at)}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[12px] text-[var(--color-text-tertiary)]">
+                      No workflow activity recorded yet.
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.03)] p-3">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                    Artifact Files
+                  </div>
+                  <div className="space-y-1 text-[12px] text-[var(--color-text-secondary)]">
+                    <div className="font-[var(--font-mono)]">{session.workflow.taskPlanPath}</div>
+                    <div className="font-[var(--font-mono)]">{session.workflow.lineagePath}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Terminal ─────────────────────────────────────────────── */}
-        <div className={pr ? "mt-6" : ""}>
+        <div className={pr || session.workflow ? "mt-6" : ""}>
           <div className="mb-3 flex items-center gap-2">
             <div
               className="h-3 w-0.5 rounded-full"

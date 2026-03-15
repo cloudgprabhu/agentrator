@@ -16,13 +16,16 @@ export function sessionFromMetadata(
   meta: Record<string, string>,
   options: SessionFromMetadataOptions = {},
 ): Session {
+  const projectId = meta["projectId"] ?? meta["project"] ?? "";
+  const issueId = (meta["issueId"] ?? meta["issue"]) || null;
+
   return {
     id: sessionId,
-    projectId: meta["project"] ?? "",
+    projectId,
     status: options.status ?? validateStatus(meta["status"]),
     activity: options.activity ?? null,
     branch: meta["branch"] || null,
-    issueId: meta["issue"] || null,
+    issueId,
     pr: meta["pr"]
       ? (() => {
           const parsed = parsePrFromUrl(meta["pr"]);

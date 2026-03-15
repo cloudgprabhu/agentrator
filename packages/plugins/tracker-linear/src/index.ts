@@ -582,6 +582,24 @@ function createLinearTracker(query: GraphQLTransport): Tracker {
         teamId,
       };
 
+      if (input.parentIssueId) {
+        try {
+          const parentData = await query<{ issue: { id: string } | null }>(
+            `query($id: String!) {
+              issue(id: $id) {
+                id
+              }
+            }`,
+            { id: input.parentIssueId },
+          );
+          if (parentData.issue?.id) {
+            variables["parentId"] = parentData.issue.id;
+          }
+        } catch {
+          // Native hierarchy is best-effort; keep issue creation working even if parent lookup fails.
+        }
+      }
+
       if (input.priority !== undefined) {
         variables["priority"] = input.priority;
       }
@@ -592,12 +610,13 @@ function createLinearTracker(query: GraphQLTransport): Tracker {
           issue: LinearIssueNode;
         };
       }>(
-        `mutation($title: String!, $description: String!, $teamId: String!, $priority: Int) {
+        `mutation($title: String!, $description: String!, $teamId: String!, $priority: Int, $parentId: String) {
           issueCreate(input: {
             title: $title,
             description: $description,
             teamId: $teamId,
-            priority: $priority
+            priority: $priority,
+            parentId: $parentId
           }) {
             success
             issue {
