@@ -176,3 +176,30 @@ export type {
   SessionMetadataRelocationSkippedEntry,
   SessionMetadataRelocationResult,
 } from "./config-migration.js";
+
+// Auth profile management — adapters, manager, and resolver
+export { createAuthManager } from "./auth-manager.js";
+export type { AuthManagerDeps } from "./auth-manager.js";
+export { resolveAuthProfile, hasInlineSecretValues } from "./auth-profile-resolver.js";
+export {
+  createAnthropicClaudeBrowserAuthAdapter,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export type {
+  ClaudeCliCommandResult,
+  ClaudeCliRunner,
+  AnthropicClaudeBrowserAdapterOptions,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export {
+  createOpenAICodexBrowserAuthAdapter,
+} from "./auth-adapters/openai-codex-browser.js";
+export type {
+  CodexCliCommandResult,
+  CodexCliRunner,
+  OpenAICodexBrowserAdapterOptions,
+} from "./auth-adapters/openai-codex-browser.js";
+export {
+  createOpenAIApiKeyAuthAdapter,
+  createAnthropicApiKeyAuthAdapter,
+  createAWSBedrockProfileAuthAdapter,
+  createConsoleAuthHookAdapter,
+} from "./auth-adapters/non-browser-auth.js";

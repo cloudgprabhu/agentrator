@@ -13,6 +13,7 @@ import { registerStart, registerStop } from "./commands/start.js";
 import { registerLifecycleWorker } from "./commands/lifecycle-worker.js";
 import { registerVerify } from "./commands/verify.js";
 import { registerConfig } from "./commands/config.js";
+import { registerAuth } from "./commands/auth.js";
 
 const program = new Command();
 
@@ -35,5 +36,6 @@ registerOpen(program);
 registerLifecycleWorker(program);
 registerVerify(program);
 registerConfig(program);
+registerAuth(program);
 
 program.parse();
