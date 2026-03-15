@@ -133,22 +133,22 @@ describe("Claude Code Activity Detection", () => {
     });
 
     // -----------------------------------------------------------------------
-    // Fallback cases (no JSONL data available)
+    // Fallback cases (no JSONL data available — process still running)
     // -----------------------------------------------------------------------
 
-    it("returns null when no session file exists yet", async () => {
-      // projectDir exists but is empty — no .jsonl files
-      expect(await agent.getActivityState(makeSession())).toBeNull();
+    it("returns active when no session file exists yet", async () => {
+      // projectDir exists but is empty — no .jsonl files, but process is running
+      expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
     });
 
-    it("returns null when no workspacePath", async () => {
-      expect(await agent.getActivityState(makeSession({ workspacePath: null }))).toBeNull();
+    it("returns active when no workspacePath", async () => {
+      expect((await agent.getActivityState(makeSession({ workspacePath: null })))?.state).toBe("active");
     });
 
-    it("returns null when project directory does not exist", async () => {
-      // Point to a workspace whose project dir doesn't exist
+    it("returns active when project directory does not exist", async () => {
+      // Point to a workspace whose project dir doesn't exist — process still running
       const badPath = join(fakeHome, "nonexistent-workspace");
-      expect(await agent.getActivityState(makeSession({ workspacePath: badPath }))).toBeNull();
+      expect((await agent.getActivityState(makeSession({ workspacePath: badPath })))?.state).toBe("active");
     });
 
     // -----------------------------------------------------------------------
@@ -290,8 +290,8 @@ describe("Claude Code Activity Detection", () => {
 
       it("ignores agent- prefixed JSONL files", async () => {
         writeJsonl([{ type: "user" }], 0, "agent-toolkit.jsonl");
-        // No real session file → returns null (cannot determine activity)
-        expect(await agent.getActivityState(makeSession())).toBeNull();
+        // No real session file → process running, returns active
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
       });
 
       it("reads last entry from multi-entry JSONL (not first)", async () => {
@@ -304,15 +304,16 @@ describe("Claude Code Activity Detection", () => {
         expect((await agent.getActivityState(makeSession()))?.state).toBe("ready");
       });
 
-      it("returns null for empty JSONL file", async () => {
+      it("returns active for empty JSONL file", async () => {
         writeFileSync(join(projectDir, "empty-session.jsonl"), "");
-        expect(await agent.getActivityState(makeSession())).toBeNull();
+        // Empty file — process is running, assume active
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
       });
 
-      it("returns null for JSONL with only whitespace", async () => {
+      it("returns active for JSONL with only whitespace", async () => {
         writeFileSync(join(projectDir, "whitespace-session.jsonl"), "\n\n  \n");
-        // All lines are whitespace — readLastJsonlEntry returns null
-        expect(await agent.getActivityState(makeSession())).toBeNull();
+        // All lines are whitespace — process is running, assume active
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
       });
 
       it("ignores non-JSONL files in project directory", async () => {

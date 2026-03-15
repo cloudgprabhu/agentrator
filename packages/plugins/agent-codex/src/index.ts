@@ -694,10 +694,10 @@ function createCodexAgent(): Agent {
       // Use session file mtime as a proxy for activity. Codex continuously
       // appends to its rollout JSONL file while working, so a recently
       // modified file means the agent is active.
-      if (!session.workspacePath) return null;
+      if (!session.workspacePath) return { state: "active", timestamp: new Date() };
 
       const sessionFile = await findCodexSessionFileCached(session.workspacePath);
-      if (!sessionFile) return null;
+      if (!sessionFile) return { state: "active", timestamp: new Date() };
 
       try {
         const s = await stat(sessionFile);
@@ -712,7 +712,8 @@ function createCodexAgent(): Agent {
         // File is stale — agent finished or is idle
         return { state: "idle", timestamp };
       } catch {
-        return null;
+        // Cannot stat session file — process is running, assume active
+        return { state: "active", timestamp: new Date() };
       }
     },
 

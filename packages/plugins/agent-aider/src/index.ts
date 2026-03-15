@@ -135,7 +135,7 @@ function createAiderAgent(): Agent {
       if (!running) return { state: "exited", timestamp: exitedAt };
 
       // Process is running - check for activity signals
-      if (!session.workspacePath) return null;
+      if (!session.workspacePath) return { state: "active", timestamp: new Date() };
 
       // Check for recent git commits (Aider auto-commits changes)
       const hasCommits = await hasRecentCommits(session.workspacePath);
@@ -144,8 +144,8 @@ function createAiderAgent(): Agent {
       // Check chat history file modification time
       const chatMtime = await getChatHistoryMtime(session.workspacePath);
       if (!chatMtime) {
-        // No chat history — cannot determine activity
-        return null;
+        // No chat history yet — process is running but hasn't written files
+        return { state: "active", timestamp: new Date() };
       }
 
       // Classify by age: <30s active, <threshold ready, >threshold idle

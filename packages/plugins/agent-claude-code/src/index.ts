@@ -714,8 +714,8 @@ function createClaudeCodeAgent(): Agent {
 
       // Process is running - check JSONL session file for activity
       if (!session.workspacePath) {
-        // No workspace path — cannot determine activity without it
-        return null;
+        // No workspace path — process is running but we can't inspect JSONL
+        return { state: "active", timestamp: new Date() };
       }
 
       const projectPath = toClaudeProjectPath(session.workspacePath);
@@ -723,14 +723,14 @@ function createClaudeCodeAgent(): Agent {
 
       const sessionFile = await findLatestSessionFile(projectDir);
       if (!sessionFile) {
-        // No session file found — cannot determine activity
-        return null;
+        // No session file yet — agent just started, process is running
+        return { state: "active", timestamp: new Date() };
       }
 
       const entry = await readLastJsonlEntry(sessionFile);
       if (!entry) {
-        // Empty file or read error — cannot determine activity
-        return null;
+        // Empty file or read error — process is running, assume active
+        return { state: "active", timestamp: new Date() };
       }
 
       const ageMs = Date.now() - entry.modifiedAt.getTime();
