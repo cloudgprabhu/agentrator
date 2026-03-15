@@ -1,7 +1,4 @@
-import type { OrchestratorConfig } from "./types.js";
-
-export type AuthProfileType = "browser-account" | "api-key" | "aws-profile" | "console";
-export type ProviderKind = "anthropic" | "openai" | "bedrock" | "custom";
+import type { AuthProfileType, OrchestratorConfig, ProviderKind } from "./types.js";
 
 export interface ProviderCapabilitiesMetadata {
   browserAuth: boolean;
