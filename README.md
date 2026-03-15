@@ -186,7 +186,7 @@ selection, while provider/auth/model/runtime settings still resolve from the sel
 
 Workflow child issue creation always preserves cross-platform linkage in lineage artifacts and issue
 bodies. Trackers that support native issue hierarchy can also attach child issues to the parent
-issue directly; the current repo implements that natively for Linear.
+issue directly on a best-effort basis; the current repo implements that for Linear and GitHub.
 
 Auth commands only show profile names, types, providers, and reference presence. They do not print
 inline secrets, tokens, or credential values.
