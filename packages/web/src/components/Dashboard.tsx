@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  type DashboardIssue,
   type DashboardSession,
   type DashboardStats,
   type DashboardPR,
@@ -17,9 +18,11 @@ import { DynamicFavicon } from "./DynamicFavicon";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { ProjectSidebar } from "./ProjectSidebar";
 import type { ProjectInfo } from "@/lib/project-name";
+import { DashboardOverview } from "./DashboardOverview";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
+  initialIssues?: DashboardIssue[];
   orchestratorId?: string | null;
   projectId?: string;
   projectName?: string;
@@ -31,6 +34,7 @@ const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as co
 
 export function Dashboard({
   initialSessions,
+  initialIssues = [],
   orchestratorId,
   projectId,
   projectName,
@@ -45,6 +49,15 @@ export function Dashboard({
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
   const [globalPauseDismissed, setGlobalPauseDismissed] = useState(false);
   const showSidebar = projects.length > 1;
+  const completedPRs = useMemo(
+    () =>
+      sessions
+        .filter((session): session is DashboardSession & { pr: DashboardPR } =>
+          Boolean(session.pr && (session.pr.state === "merged" || session.pr.state === "closed")),
+        )
+        .sort((a, b) => Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt)),
+    [sessions],
+  );
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
       merge: [],
@@ -137,14 +150,8 @@ export function Dashboard({
       {showSidebar && <ProjectSidebar projects={projects} activeProjectId={projectId} />}
       <div className="flex-1 overflow-y-auto px-8 py-7">
         <DynamicFavicon sessions={sessions} projectName={projectName} />
-        {/* Header */}
-        <div className="mb-8 flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-6">
-          <div className="flex items-center gap-6">
-            <h1 className="text-[17px] font-semibold tracking-[-0.02em] text-[var(--color-text-primary)]">
-              {projectName ?? "Orchestrator"}
-            </h1>
-            <StatusLine stats={liveStats} />
-          </div>
+        <div className="mb-6 flex items-center justify-between gap-6">
+          <StatusLine stats={liveStats} />
           {orchestratorId && (
             <a
               href={`/sessions/${encodeURIComponent(orchestratorId)}`}
@@ -164,6 +171,15 @@ export function Dashboard({
             </a>
           )}
         </div>
+
+        <DashboardOverview
+          sessions={sessions}
+          issues={initialIssues}
+          projectName={projectName}
+          orchestratorId={orchestratorId}
+          onMerge={handleMerge}
+          onRestore={handleRestore}
+        />
 
         {/* Global pause banner */}
         {globalPause && !globalPauseDismissed && (
@@ -242,23 +258,35 @@ export function Dashboard({
 
         {/* Kanban columns for active zones */}
         {hasKanbanSessions && (
-          <div className="mb-8 flex gap-4 overflow-x-auto pb-2">
-            {KANBAN_LEVELS.map((level) =>
-              grouped[level].length > 0 ? (
-                <div key={level} className="min-w-[200px] flex-1">
-                  <AttentionZone
-                    level={level}
-                    sessions={grouped[level]}
-                    variant="column"
-                    onSend={handleSend}
-                    onKill={handleKill}
-                    onMerge={handleMerge}
-                    onRestore={handleRestore}
-                  />
-                </div>
-              ) : null,
-            )}
-          </div>
+          <section id="board" className="mb-8">
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
+                  Active board
+                </h2>
+                <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+                  Attention-ordered view of live agent work.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {KANBAN_LEVELS.map((level) =>
+                grouped[level].length > 0 ? (
+                  <div key={level} className="min-w-[200px] flex-1">
+                    <AttentionZone
+                      level={level}
+                      sessions={grouped[level]}
+                      variant="column"
+                      onSend={handleSend}
+                      onKill={handleKill}
+                      onMerge={handleMerge}
+                      onRestore={handleRestore}
+                    />
+                  </div>
+                ) : null,
+              )}
+            </div>
+          </section>
         )}
 
         {/* Done — full-width grid below Kanban */}
@@ -278,7 +306,7 @@ export function Dashboard({
 
         {/* PR Table */}
         {openPRs.length > 0 && (
-          <div className="mx-auto max-w-[900px]">
+          <section id="prs" className="mx-auto mb-8 max-w-[980px]">
             <h2 className="mb-3 px-1 text-[10px] font-bold uppercase tracking-[0.10em] text-[var(--color-text-tertiary)]">
               Pull Requests
             </h2>
@@ -313,8 +341,117 @@ export function Dashboard({
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         )}
+
+        {completedPRs.length > 0 && (
+          <section id="completed-prs" className="mx-auto mb-8 max-w-[980px]">
+            <div className="mb-3 px-1">
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.10em] text-[var(--color-text-tertiary)]">
+                Completed PRs
+              </h2>
+              <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+                Recently merged or closed work linked to agent sessions.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {completedPRs.slice(0, 8).map((session) => (
+                <article
+                  key={session.id}
+                  className="rounded-[12px] border border-[var(--color-border-default)] bg-[rgba(255,255,255,0.03)] px-4 py-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-[var(--font-mono)] text-[11px] text-[var(--color-text-muted)]">
+                        {session.id}
+                      </p>
+                      <a
+                        href={session.pr.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 block truncate text-[14px] font-semibold text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:no-underline"
+                      >
+                        {session.pr.title}
+                      </a>
+                    </div>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                      {session.pr.state}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+                    <span>PR #{session.pr.number}</span>
+                    <span className="text-[var(--color-border-strong)]">·</span>
+                    <span className="text-[var(--color-status-ready)]">+{session.pr.additions}</span>
+                    <span className="text-[var(--color-status-error)]">-{session.pr.deletions}</span>
+                    {session.issueLabel && (
+                      <>
+                        <span className="text-[var(--color-border-strong)]">·</span>
+                        <span>{session.issueLabel}</span>
+                      </>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section id="issues" className="mx-auto max-w-[980px]">
+          <div className="mb-3 px-1">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.10em] text-[var(--color-text-tertiary)]">
+              Created Issues
+            </h2>
+            <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+              Open tracker items visible from the current project scope.
+            </p>
+          </div>
+
+          {initialIssues.length === 0 ? (
+            <div className="rounded-[12px] border border-dashed border-[var(--color-border-subtle)] px-4 py-8 text-center text-[13px] text-[var(--color-text-secondary)]">
+              No open issues returned by the tracker.
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {initialIssues.map((issue) => (
+                <article
+                  key={`${issue.projectId}-${issue.id}`}
+                  className="rounded-[12px] border border-[var(--color-border-default)] bg-[rgba(255,255,255,0.03)] px-4 py-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-[var(--font-mono)] text-[11px] text-[var(--color-text-muted)]">
+                        {issue.id}
+                      </p>
+                      <a
+                        href={issue.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 block text-[14px] font-semibold text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:no-underline"
+                      >
+                        {issue.title}
+                      </a>
+                    </div>
+                    <span className="rounded-full border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-secondary)]">
+                      {issue.projectId}
+                    </span>
+                  </div>
+                  {issue.labels.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {issue.labels.slice(0, 4).map((label) => (
+                        <span
+                          key={`${issue.projectId}-${issue.id}-${label}`}
+                          className="rounded-[6px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2 py-1 text-[10px] text-[var(--color-text-secondary)]"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

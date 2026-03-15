@@ -79,6 +79,15 @@ export interface DashboardSession {
   workflow?: DashboardWorkflowContext | null;
 }
 
+export interface DashboardIssue {
+  projectId: string;
+  id: string;
+  title: string;
+  url: string;
+  state: string;
+  labels: string[];
+}
+
 export interface DashboardSessionRuntime {
   role: string | null;
   agent: string | null;

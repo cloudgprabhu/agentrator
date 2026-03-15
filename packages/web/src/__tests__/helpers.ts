@@ -1,4 +1,4 @@
-import type { DashboardSession, DashboardPR } from "@/lib/types";
+import type { DashboardIssue, DashboardSession, DashboardPR } from "@/lib/types";
 
 /** Create a minimal mock session with overrides */
 export function makeSession(overrides: Partial<DashboardSession> = {}): DashboardSession {
@@ -60,6 +60,19 @@ export function makePR(overrides: Partial<DashboardPR> = {}): DashboardPR {
     },
     unresolvedThreads: 0,
     unresolvedComments: [],
+    ...overrides,
+  };
+}
+
+/** Create a minimal mock issue with overrides */
+export function makeIssue(overrides: Partial<DashboardIssue> = {}): DashboardIssue {
+  return {
+    projectId: "my-app",
+    id: "#19",
+    title: "Improve dashboard navigation",
+    url: "https://github.com/acme/app/issues/19",
+    state: "open",
+    labels: ["agent:backlog"],
     ...overrides,
   };
 }
