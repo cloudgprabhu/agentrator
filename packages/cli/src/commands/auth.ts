@@ -156,11 +156,25 @@ export function registerAuth(program: Command): void {
           chalk.bold(opts.live ? "Auth profile status (live validation):" : "Auth profile status:"),
         );
 
-        for (const [key] of profiles) {
-          const [status, health] = await Promise.all([
-            manager.getProfileStatus(key),
-            manager.checkProfileHealth(key, { live: opts.live }),
-          ]);
+        const results = await Promise.allSettled(
+          profiles.map(async ([key]) => {
+            const [status, health] = await Promise.all([
+              manager.getProfileStatus(key),
+              manager.checkProfileHealth(key, { live: opts.live }),
+            ]);
+            return { key, status, health };
+          }),
+        );
+
+        let hadError = false;
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.error(chalk.red(result.reason instanceof Error ? result.reason.message : String(result.reason)));
+            hadError = true;
+            continue;
+          }
+
+          const { key, status, health } = result.value;
           const statusText = `${status.status}: ${status.message}`;
           const color =
             status.status === "authenticated"
@@ -178,6 +192,10 @@ export function registerAuth(program: Command): void {
           for (const check of health.checks.filter((entry) => entry.status === "warn")) {
             console.log(chalk.yellow(`    Warning: ${check.detail}`));
           }
+        }
+
+        if (hadError) {
+          process.exit(1);
         }
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));

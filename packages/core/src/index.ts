@@ -74,6 +74,19 @@ export type {
   DecomposerConfig,
 } from "./decomposer.js";
 
+// Task lineage — safe lineage repair and validation
+export {
+  validateLineage,
+  repairLineage,
+  detectAmbiguousRelocation,
+  buildLineageArray,
+} from "./task-lineage.js";
+export type {
+  TaskLineageNode,
+  LineageRepairResult,
+  AmbiguousRelocationCandidate,
+} from "./task-lineage.js";
+
 // Orchestrator prompt — generates orchestrator context for `ao start`
 export { generateOrchestratorPrompt } from "./orchestrator-prompt.js";
 export type { OrchestratorPromptConfig } from "./orchestrator-prompt.js";
@@ -256,3 +269,44 @@ export type {
   DetectedProjectInfo,
   GenerateConfigOptions,
 } from "./config-generator.js";
+
+// Config migration — migrate legacy config and relocate session metadata
+export {
+  getDefaultMigratedConfigPath,
+  migrateLegacyConfig,
+  migrateLegacyConfigFile,
+  relocateLegacySessionMetadata,
+} from "./config-migration.js";
+export type {
+  ConfigMigrationResult,
+  SessionMetadataRelocationProjectResult,
+  SessionMetadataRelocationSkippedEntry,
+  SessionMetadataRelocationResult,
+} from "./config-migration.js";
+
+// Auth profile management — adapters, manager, and resolver
+export { createAuthManager } from "./auth-manager.js";
+export type { AuthManagerDeps } from "./auth-manager.js";
+export { resolveAuthProfile, hasInlineSecretValues } from "./auth-profile-resolver.js";
+export {
+  createAnthropicClaudeBrowserAuthAdapter,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export type {
+  ClaudeCliCommandResult,
+  ClaudeCliRunner,
+  AnthropicClaudeBrowserAdapterOptions,
+} from "./auth-adapters/anthropic-claude-browser.js";
+export {
+  createOpenAICodexBrowserAuthAdapter,
+} from "./auth-adapters/openai-codex-browser.js";
+export type {
+  CodexCliCommandResult,
+  CodexCliRunner,
+  OpenAICodexBrowserAdapterOptions,
+} from "./auth-adapters/openai-codex-browser.js";
+export {
+  createOpenAIApiKeyAuthAdapter,
+  createAnthropicApiKeyAuthAdapter,
+  createAWSBedrockProfileAuthAdapter,
+  createConsoleAuthHookAdapter,
+} from "./auth-adapters/non-browser-auth.js";

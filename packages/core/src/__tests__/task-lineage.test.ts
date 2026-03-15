@@ -1,651 +1,379 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
-  TASK_LINEAGE_VERSION,
-  auditTaskLineageFile,
-  canTransitionTaskLineageChildState,
-  createTaskLineageSessionRef,
-  findTaskLineageByChildOrPRRef,
-  findTaskLineageByChildIssue,
-  findTaskLineageByPREvent,
-  findTaskLineageByParentIssue,
-  findTaskLineageBySession,
-  getAllowedTaskLineageChildStateTransitions,
-  mergeTaskLineageChildIssues,
-  parseTaskLineage,
-  parseTaskLineageChildState,
-  recordTaskLineageChildSession,
-  recordTaskLineagePR,
-  readTaskLineageFile,
-  summarizeTaskLineageStates,
-  taskLineageToYaml,
-  transitionTaskLineageChildState,
-  updateTaskLineageTaskPlanPath,
-  upsertTaskLineagePlanningSession,
-  validateTaskLineage,
+  type TaskLineageNode,
+  validateLineage,
+  repairLineage,
+  detectAmbiguousRelocation,
+  buildLineageArray,
 } from "../task-lineage.js";
 
-describe("task lineage validation", () => {
-  it("validates and normalizes a lineage artifact", () => {
-    const lineage = validateTaskLineage({
-      version: TASK_LINEAGE_VERSION,
-      parentIssue: "  INT-42 ",
-      taskPlanPath: " docs/plans/int-42.task-plan.yaml ",
-      trackerPlugin: " github ",
-      createdAt: "2026-03-13T12:00:00.000Z",
-      childIssues: [
+describe("task-lineage", () => {
+  describe("validateLineage", () => {
+    it("validates a valid task tree", () => {
+      const tasks: TaskLineageNode[] = [
         {
-          taskIndex: 0,
-          title: " Define schema ",
-          issueId: " 123 ",
-          issueUrl: " https://github.com/acme/repo/issues/123 ",
-          issueLabel: " #123 ",
-          labels: [" workflow "],
-          dependencies: [],
-          state: "queued",
-          implementationSessions: [],
-          reviewSessions: [],
-          pr: null,
+          id: "1",
+          parentId: null,
+          childIds: ["1.1", "1.2"],
+          description: "Root task",
+          depth: 0,
         },
-      ],
+        {
+          id: "1.1",
+          parentId: "1",
+          childIds: [],
+          description: "Subtask 1",
+          depth: 1,
+        },
+        {
+          id: "1.2",
+          parentId: "1",
+          childIds: [],
+          description: "Subtask 2",
+          depth: 1,
+        },
+      ];
+
+      const result = validateLineage(tasks);
+
+      expect(result.success).toBe(true);
+      expect(result.errors).toHaveLength(0);
     });
 
-    expect(lineage).toEqual({
-      version: TASK_LINEAGE_VERSION,
-      parentIssue: "INT-42",
-      taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-      trackerPlugin: "github",
-      createdAt: "2026-03-13T12:00:00.000Z",
-      planningSession: null,
-      childIssues: [
+    it("detects missing parent reference", () => {
+      const tasks: TaskLineageNode[] = [
         {
-          taskIndex: 0,
-          title: "Define schema",
-          issueId: "123",
-          issueUrl: "https://github.com/acme/repo/issues/123",
-          issueLabel: "#123",
-          labels: ["workflow"],
-          dependencies: [],
-          state: "queued",
-          implementationSessions: [],
-          reviewSessions: [],
-          pr: null,
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
         },
-      ],
+        {
+          id: "1.1",
+          parentId: "999", // non-existent parent
+          childIds: [],
+          description: "Subtask 1",
+          depth: 1,
+        },
+      ];
+
+      const result = validateLineage(tasks);
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toContain("Task 1.1: parent 999 not found");
+    });
+
+    it("detects missing child reference", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["999"], // non-existent child
+          description: "Root task",
+          depth: 0,
+        },
+      ];
+
+      const result = validateLineage(tasks);
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toContain("Task 1: child 999 not found");
+    });
+
+    it("detects inconsistent bidirectional link", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          parentId: "999", // points to wrong parent
+          childIds: [],
+          description: "Subtask 1",
+          depth: 1,
+        },
+      ];
+
+      const result = validateLineage(tasks);
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toContain(
+        "Task 1: child 1.1 has parent 999, expected 1",
+      );
+    });
+
+    it("detects depth inconsistency", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          parentId: "1",
+          childIds: [],
+          description: "Subtask 1",
+          depth: 5, // wrong depth
+        },
+      ];
+
+      const result = validateLineage(tasks);
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toContain(
+        "Task 1.1: depth 5 inconsistent with parent depth 0",
+      );
     });
   });
 
-  it("rejects malformed lineage entries with source context", () => {
-    expect(() =>
-      validateTaskLineage(
+  describe("repairLineage", () => {
+    it("skips repair when relocation is ambiguous (multiple candidates)", () => {
+      const tasks: TaskLineageNode[] = [
         {
-          version: TASK_LINEAGE_VERSION,
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-13T12:00:00.000Z",
-          childIssues: [
-            {
-              taskIndex: 0,
-              title: "Define schema",
-              issueId: "123",
-              issueUrl: "https://github.com/acme/repo/issues/123",
-              labels: [],
-              dependencies: [],
-              implementationSessions: [],
-              reviewSessions: [],
-              pr: null,
-            },
-          ],
-        },
-        "docs/plans/int-42.lineage.yaml",
-      ),
-    ).toThrow(
-      "Invalid task lineage in docs/plans/int-42.lineage.yaml: childIssues[0].issueLabel: Required",
-    );
-  });
-
-  it("rejects invalid yaml content with source context", () => {
-    expect(() =>
-      parseTaskLineage("version: 1\nparentIssue: INT-42\nchildIssues:\n  - title: bad: yaml", "lineage.yaml"),
-    ).toThrow("Failed to parse task lineage YAML in lineage.yaml");
-  });
-
-  it("reads and validates a lineage file", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-"));
-    const filePath = join(dir, "int-42.lineage.yaml");
-
-    try {
-      writeFileSync(
-        filePath,
-        taskLineageToYaml({
-          version: TASK_LINEAGE_VERSION,
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-13T12:00:00.000Z",
-          planningSession: null,
-          childIssues: [
-            {
-              taskIndex: 0,
-              title: "Implement validator",
-              issueId: "123",
-              issueUrl: "https://github.com/acme/repo/issues/123",
-              issueLabel: "#123",
-              labels: ["workflow"],
-              dependencies: [],
-              state: "queued",
-              implementationSessions: [],
-              reviewSessions: [],
-              pr: null,
-            },
-          ],
-        }),
-      );
-
-      expect(readTaskLineageFile(filePath)).toEqual({
-        version: TASK_LINEAGE_VERSION,
-        parentIssue: "INT-42",
-        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-        trackerPlugin: "github",
-        createdAt: "2026-03-13T12:00:00.000Z",
-        planningSession: null,
-        childIssues: [
-          {
-            taskIndex: 0,
-            title: "Implement validator",
-            issueId: "123",
-            issueUrl: "https://github.com/acme/repo/issues/123",
-              issueLabel: "#123",
-              labels: ["workflow"],
-              dependencies: [],
-              state: "queued",
-              implementationSessions: [],
-              reviewSessions: [],
-              pr: null,
-          },
-        ],
-      });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("updates planning, child-session, and pr lineage relationships", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-store-"));
-    const projectPath = join(dir, "project");
-    const filePath = join(projectPath, "docs", "plans", "int-42.lineage.yaml");
-
-    try {
-      upsertTaskLineagePlanningSession(
-        filePath,
-        {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-14T09:00:00.000Z",
-        },
-        createTaskLineageSessionRef(
-          {
-            id: "planner-1",
-            branch: "feat/int-42-plan",
-            workspacePath: "/tmp/worktrees/planner-1",
-            createdAt: new Date("2026-03-14T09:00:00.000Z"),
-          },
-          "planner",
-        ),
-      );
-
-      mergeTaskLineageChildIssues(
-        filePath,
-        {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-        },
-        [
-          {
-            taskIndex: 0,
-            title: "Define schema",
-            issueId: "101",
-            issueUrl: "https://github.com/acme/repo/issues/101",
-            issueLabel: "#101",
-            labels: ["workflow"],
-            dependencies: [],
-            state: "queued",
-            implementationSessions: [],
-            reviewSessions: [],
-            pr: null,
-          },
-        ],
-      );
-
-      recordTaskLineageChildSession(
-        projectPath,
-        "101",
-        "implementation",
-        createTaskLineageSessionRef(
-          {
-            id: "impl-1",
-            branch: "feat/issue-101",
-            workspacePath: "/tmp/worktrees/impl-1",
-            createdAt: new Date("2026-03-14T10:00:00.000Z"),
-          },
-          "implementer",
-        ),
-      );
-      recordTaskLineageChildSession(
-        projectPath,
-        "101",
-        "review",
-        createTaskLineageSessionRef(
-          {
-            id: "review-1",
-            branch: "feat/issue-101",
-            workspacePath: "/tmp/worktrees/review-1",
-            createdAt: new Date("2026-03-14T11:00:00.000Z"),
-          },
-          "reviewer",
-        ),
-      );
-      recordTaskLineagePR(projectPath, "impl-1", {
-        number: 88,
-        url: "https://github.com/acme/repo/pull/88",
-        branch: "feat/issue-101",
-        state: "open",
-      });
-
-      const lineage = readTaskLineageFile(filePath);
-      expect(lineage.projectId).toBe("my-app");
-      expect(lineage.planningSession?.sessionId).toBe("planner-1");
-      expect(lineage.childIssues[0]?.state).toBe("waiting_review");
-      expect(lineage.childIssues[0]?.implementationSessions[0]?.sessionId).toBe("impl-1");
-      expect(lineage.childIssues[0]?.reviewSessions[0]?.sessionId).toBe("review-1");
-      expect(lineage.childIssues[0]?.pr).toMatchObject({
-        number: 88,
-        url: "https://github.com/acme/repo/pull/88",
-      });
-      expect(summarizeTaskLineageStates(lineage)).toEqual({
-        queued: 0,
-        in_progress: 0,
-        blocked: 0,
-        pr_opened: 0,
-        waiting_review: 1,
-        changes_requested: 0,
-        approved: 0,
-        done: 0,
-      });
-      expect(findTaskLineageByParentIssue(projectPath, "INT-42")?.filePath).toBe(filePath);
-      expect(findTaskLineageByChildIssue(projectPath, "101")?.childIndex).toBe(0);
-      expect(findTaskLineageByChildOrPRRef(projectPath, "#101")?.matchedBy).toBe("issue");
-      expect(findTaskLineageByChildOrPRRef(projectPath, "88")?.matchedBy).toBe("pr");
-      expect(findTaskLineageByPREvent(projectPath, { prNumber: 88 })?.matchedBy).toBe("pr");
-      expect(findTaskLineageByPREvent(projectPath, { branch: "feat/issue-101" })?.matchedBy).toBe(
-        "pr",
-      );
-      expect(findTaskLineageBySession(projectPath, "impl-1")?.childIndex).toBe(0);
-      expect(findTaskLineageBySession(projectPath, "planner-1")?.childIndex).toBeNull();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("supports explicit child issue state transitions and validates transition rules", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-state-"));
-    const projectPath = join(dir, "project");
-    const filePath = join(projectPath, "docs", "plans", "int-42.lineage.yaml");
-
-    try {
-      mergeTaskLineageChildIssues(
-        filePath,
-        {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-14T09:00:00.000Z",
-        },
-        [
-          {
-            taskIndex: 0,
-            title: "Define schema",
-            issueId: "101",
-            issueUrl: "https://github.com/acme/repo/issues/101",
-            issueLabel: "#101",
-            labels: ["workflow"],
-            dependencies: [],
-            state: "queued",
-            implementationSessions: [],
-            reviewSessions: [],
-            pr: null,
-          },
-        ],
-      );
-
-      expect(getAllowedTaskLineageChildStateTransitions("queued")).toContain("in_progress");
-      expect(canTransitionTaskLineageChildState("approved", "done")).toBe(true);
-      expect(canTransitionTaskLineageChildState("done", "in_progress")).toBe(false);
-      expect(parseTaskLineageChildState("APPROVED")).toBe("approved");
-
-      transitionTaskLineageChildState(projectPath, "101", "blocked");
-      transitionTaskLineageChildState(projectPath, "101", "in_progress");
-      transitionTaskLineageChildState(projectPath, "101", "approved");
-      transitionTaskLineageChildState(projectPath, "101", "done");
-
-      expect(readTaskLineageFile(filePath).childIssues[0]?.state).toBe("done");
-      expect(() => transitionTaskLineageChildState(projectPath, "101", "in_progress")).toThrow(
-        "Invalid task lineage child state transition: done -> in_progress",
-      );
-      expect(() => parseTaskLineageChildState("unknown")).toThrow(
-        "Unknown task lineage child state: unknown",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("updates the stored task-plan path for an existing lineage artifact", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-repoint-"));
-    const projectPath = join(dir, "project");
-    const filePath = join(projectPath, "docs", "plans", "int-42.lineage.yaml");
-
-    try {
-      mergeTaskLineageChildIssues(
-        filePath,
-        {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-14T09:00:00.000Z",
-        },
-        [
-          {
-            taskIndex: 0,
-            title: "Define schema",
-            issueId: "101",
-            issueUrl: "https://github.com/acme/repo/issues/101",
-            issueLabel: "#101",
-            labels: ["workflow"],
-            dependencies: [],
-            state: "queued",
-            implementationSessions: [],
-            reviewSessions: [],
-            pr: null,
-          },
-        ],
-      );
-
-      const updated = updateTaskLineageTaskPlanPath(
-        projectPath,
-        "INT-42",
-        "docs/archive/int-42.task-plan.yaml",
-      );
-
-      expect(updated?.taskPlanPath).toBe("docs/archive/int-42.task-plan.yaml");
-      expect(readTaskLineageFile(filePath).taskPlanPath).toBe("docs/archive/int-42.task-plan.yaml");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects lineage overwrites when the base parent/task-plan reference drifts", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-mismatch-"));
-    const filePath = join(dir, "project", "docs", "plans", "int-42.lineage.yaml");
-
-    try {
-      upsertTaskLineagePlanningSession(
-        filePath,
-        {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-14T09:00:00.000Z",
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
         },
         {
-          sessionId: "planner-1",
-          role: "planner",
-          branch: "feat/int-42-plan",
-          worktreePath: "/tmp/planner-1",
-          createdAt: "2026-03-14T09:00:00.000Z",
+          id: "2",
+          parentId: null,
+          childIds: ["2.1"],
+          description: "Another root",
+          depth: 0,
         },
-      );
-
-      expect(() =>
-        mergeTaskLineageChildIssues(
-          filePath,
-          {
-            projectId: "my-app",
-            parentIssue: "INT-99",
-            taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-            trackerPlugin: "github",
-          },
-          [],
-        ),
-      ).toThrow("existing parentIssue 'INT-42' does not match 'INT-99'");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects lineage merges that would drop existing child issue references", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-child-refs-"));
-    const filePath = join(dir, "project", "docs", "plans", "int-42.lineage.yaml");
-
-    try {
-      mergeTaskLineageChildIssues(
-        filePath,
         {
-          projectId: "my-app",
-          parentIssue: "INT-42",
-          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-          trackerPlugin: "github",
-          createdAt: "2026-03-14T09:00:00.000Z",
+          id: "orphan",
+          parentId: null, // missing parent
+          childIds: [],
+          description: "Orphaned task",
+          depth: 1, // depth indicates it should have a parent
         },
-        [
-          {
-            taskIndex: 0,
-            title: "Define schema",
-            issueId: "101",
-            issueUrl: "https://github.com/acme/repo/issues/101",
-            issueLabel: "#101",
-            labels: ["workflow"],
-            dependencies: [],
-            state: "queued",
-            implementationSessions: [],
-            reviewSessions: [],
-            pr: null,
-          },
-          {
-            taskIndex: 1,
-            title: "Implement API",
-            issueId: "102",
-            issueUrl: "https://github.com/acme/repo/issues/102",
-            issueLabel: "#102",
-            labels: ["workflow"],
-            dependencies: ["101"],
-            state: "queued",
-            implementationSessions: [],
-            reviewSessions: [],
-            pr: null,
-          },
-        ],
-      );
+        {
+          id: "1.1",
+          parentId: "1",
+          childIds: [],
+          description: "Child of 1",
+          depth: 1,
+        },
+        {
+          id: "2.1",
+          parentId: "2",
+          childIds: [],
+          description: "Child of 2",
+          depth: 1,
+        },
+      ];
 
-      expect(() =>
-        mergeTaskLineageChildIssues(
-          filePath,
-          {
-            projectId: "my-app",
-            parentIssue: "INT-42",
-            taskPlanPath: "docs/plans/int-42.task-plan.yaml",
-            trackerPlugin: "github",
-          },
-          [
-            {
-              taskIndex: 0,
-              title: "Define schema",
-              issueId: "101",
-              issueUrl: "https://github.com/acme/repo/issues/101",
-              issueLabel: "#101",
-              labels: ["workflow"],
-              dependencies: [],
-              state: "queued",
-              implementationSessions: [],
-              reviewSessions: [],
-              pr: null,
-            },
-          ],
-        ),
-      ).toThrow("missing child issue reference for existing taskIndex 1 (#102)");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+      const result = repairLineage(tasks, { apply: false });
+
+      // Should skip the orphaned task because there are 2 candidates (tasks at depth 0)
+      expect(result.skippedCount).toBeGreaterThan(0);
+      expect(result.warnings.some((w) => w.includes("ambiguous"))).toBe(true);
+      expect(result.warnings.some((w) => w.includes("orphan"))).toBe(true);
+    });
+
+    it("emits warning for ambiguous task-plan relocation", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "parent",
+          parentId: null,
+          childIds: ["child1", "child2"],
+          description: "Parent task",
+          depth: 0,
+        },
+        {
+          id: "child1",
+          parentId: "parent",
+          childIds: [],
+          description: "Implement auth",
+          depth: 1,
+        },
+        {
+          id: "child2",
+          parentId: "parent",
+          childIds: [],
+          description: "Implement auth",
+          depth: 1,
+        },
+        {
+          id: "orphan",
+          parentId: "parent", // parent exists but doesn't list it
+          childIds: [],
+          description: "Implement auth", // same description as existing children
+          depth: 1,
+        },
+      ];
+
+      const result = repairLineage(tasks, { apply: false });
+
+      expect(result.warnings.some((w) => w.includes("ambiguous relocation"))).toBe(true);
+      expect(result.warnings.some((w) => w.includes("SKIPPING"))).toBe(true);
+      expect(result.skippedCount).toBeGreaterThan(0);
+    });
+
+    it("repairs unambiguous missing parent reference", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          parentId: null, // missing parent
+          childIds: [],
+          description: "Subtask 1",
+          depth: 1,
+        },
+      ];
+
+      const result = repairLineage(tasks, { apply: true });
+
+      // Should repair since there's only one candidate parent (task at depth 0)
+      expect(result.repairedCount).toBeGreaterThan(0);
+      expect(tasks[1].parentId).toBe("1");
+    });
+
+    it("does not apply repairs in dry run mode", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          parentId: null, // missing parent
+          childIds: [],
+          description: "Subtask 1",
+          depth: 1,
+        },
+      ];
+
+      const result = repairLineage(tasks, { apply: false });
+
+      expect(result.repairedCount).toBeGreaterThan(0);
+      expect(tasks[1].parentId).toBe(null); // Should not have been modified
+    });
   });
 
-  it("audits lineage drift against the task plan and reports missing child refs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-audit-"));
-    const projectPath = join(dir, "project");
-    const filePath = join(projectPath, "docs", "plans", "int-42.lineage.yaml");
-    const taskPlanPath = join(projectPath, "docs", "plans", "int-42.task-plan.yaml");
+  describe("detectAmbiguousRelocation", () => {
+    it("detects similar tasks as relocation candidates", () => {
+      const availableTasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: [],
+          description: "Implement user authentication system",
+          depth: 0,
+        },
+        {
+          id: "2",
+          parentId: null,
+          childIds: [],
+          description: "Implement user authorization module",
+          depth: 0,
+        },
+        {
+          id: "3",
+          parentId: null,
+          childIds: [],
+          description: "Build frontend dashboard",
+          depth: 0,
+        },
+      ];
 
-    try {
-      mkdirSync(join(projectPath, "docs", "plans"), { recursive: true });
-      writeFileSync(
-        taskPlanPath,
-        [
-          "version: 1",
-          "parentIssue: INT-42",
-          "specPath: null",
-          "adrPath: null",
-          "childTasks:",
-          "  - title: Define schema",
-          "    summary: Add validator",
-          "    acceptanceCriteria:",
-          "      - Validator exists",
-          "    dependencies: []",
-          "    suggestedFiles: []",
-          "    labels: []",
-          "  - title: Add CLI",
-          "    summary: Add workflow command",
-          "    acceptanceCriteria:",
-          "      - Command works",
-          "    dependencies: []",
-          "    suggestedFiles: []",
-          "    labels: []",
-          "",
-        ].join("\n"),
-      );
-      writeFileSync(
-        filePath,
-        [
-          "version: 1",
-          "parentIssue: INT-99",
-          "taskPlanPath: docs/plans/int-42.task-plan.yaml",
-          "trackerPlugin: github",
-          "createdAt: 2026-03-13T12:00:00.000Z",
-          "childIssues:",
-          "  - taskIndex: 0",
-          "    title: Define schema",
-          "    issueId: '101'",
-          "    issueUrl: https://github.com/acme/repo/issues/101",
-          "    issueLabel: '#101'",
-          "    labels: []",
-          "    dependencies: []",
-          "    state: queued",
-          "    implementationSessions: []",
-          "    reviewSessions: []",
-          "    pr: null",
-          "",
-        ].join("\n"),
+      const candidates = detectAmbiguousRelocation(
+        "new-task",
+        "Implement user authentication",
+        availableTasks,
       );
 
-      const audit = auditTaskLineageFile(filePath, { projectPath });
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(candidates[0].id).toBe("1"); // Most similar
+      expect(candidates[0].score).toBeGreaterThan(0);
+    });
 
-      expect(audit.ok).toBe(false);
-      expect(audit.repaired).toBe(false);
-      expect(audit.findings.map((finding) => finding.code)).toEqual(
-        expect.arrayContaining(["parent_issue_drift", "missing_child_refs"]),
+    it("returns empty array when no similar tasks exist", () => {
+      const availableTasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: [],
+          description: "Completely unrelated task",
+          depth: 0,
+        },
+      ];
+
+      const candidates = detectAmbiguousRelocation(
+        "new-task",
+        "Implement user authentication",
+        availableTasks,
       );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+
+      expect(candidates).toHaveLength(0);
+    });
   });
 
-  it("repairs safe lineage fixes for state aliases, parent drift, and task-plan overrides", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ao-task-lineage-repair-"));
-    const projectPath = join(dir, "project");
-    const plansDir = join(projectPath, "docs", "plans");
-    const filePath = join(plansDir, "int-42.lineage.yaml");
-    const replacementPlanPath = join(plansDir, "int-42-fixed.task-plan.yaml");
+  describe("buildLineageArray", () => {
+    it("builds correct lineage array for nested task", () => {
+      const tasks: TaskLineageNode[] = [
+        {
+          id: "1",
+          parentId: null,
+          childIds: ["1.1"],
+          description: "Root task",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          parentId: "1",
+          childIds: ["1.1.1"],
+          description: "Level 1 task",
+          depth: 1,
+        },
+        {
+          id: "1.1.1",
+          parentId: "1.1",
+          childIds: [],
+          description: "Level 2 task",
+          depth: 2,
+        },
+      ];
 
-    try {
-      mkdirSync(plansDir, { recursive: true });
-      writeFileSync(
-        replacementPlanPath,
-        [
-          "version: 1",
-          "parentIssue: INT-42",
-          "specPath: null",
-          "adrPath: null",
-          "childTasks:",
-          "  - title: Define schema",
-          "    summary: Add validator",
-          "    acceptanceCriteria:",
-          "      - Validator exists",
-          "    dependencies: []",
-          "    suggestedFiles: []",
-          "    labels: []",
-          "",
-        ].join("\n"),
-      );
-      writeFileSync(
-        filePath,
-        [
-          "parentIssue: INT-99",
-          "taskPlanPath: docs/plans/stale.task-plan.yaml",
-          "trackerPlugin: github",
-          "createdAt: 2026-03-13T12:00:00.000Z",
-          "childIssues:",
-          "  - taskIndex: 0",
-          "    title: Define schema",
-          "    issueId: '101'",
-          "    issueUrl: https://github.com/acme/repo/issues/101",
-          "    issueLabel: '#101'",
-          "    labels: []",
-          "    dependencies: []",
-          "    state: waiting-review",
-          "    implementationSessions: []",
-          "    reviewSessions: []",
-          "    pr: null",
-          "",
-        ].join("\n"),
-      );
+      const taskMap = new Map(tasks.map((t) => [t.id, t]));
+      const lineage = buildLineageArray(tasks[2], taskMap);
 
-      const audit = auditTaskLineageFile(filePath, {
-        projectPath,
-        repair: true,
-        taskPlanPathOverride: "docs/plans/int-42-fixed.task-plan.yaml",
-        now: "2026-03-14T12:00:00.000Z",
-      });
-      const repaired = readTaskLineageFile(filePath);
+      expect(lineage).toEqual(["Root task", "Level 1 task"]);
+    });
 
-      expect(audit.repaired).toBe(true);
-      expect(audit.lineage?.parentIssue).toBe("INT-42");
-      expect(repaired.parentIssue).toBe("INT-42");
-      expect(repaired.taskPlanPath).toBe("docs/plans/int-42-fixed.task-plan.yaml");
-      expect(repaired.updatedAt).toBe("2026-03-14T12:00:00.000Z");
-      expect(repaired.childIssues[0]?.state).toBe("waiting_review");
-      expect(audit.findings.filter((finding) => finding.repaired).map((finding) => finding.code)).toEqual(
-        expect.arrayContaining(["missing_version", "missing_updated_at", "task_plan_override", "child_state_alias", "parent_issue_drift"]),
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    it("returns empty array for root task", () => {
+      const task: TaskLineageNode = {
+        id: "1",
+        parentId: null,
+        childIds: [],
+        description: "Root task",
+        depth: 0,
+      };
+
+      const taskMap = new Map([[task.id, task]]);
+      const lineage = buildLineageArray(task, taskMap);
+
+      expect(lineage).toEqual([]);
+    });
   });
 });
