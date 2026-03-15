@@ -457,6 +457,63 @@ describe("tracker-github plugin", () => {
       );
     });
 
+    it("attaches created issues as GitHub sub-issues when parentIssueId is provided", async () => {
+      mockGhRaw("https://github.com/acme/repo/issues/1001\n");
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+      mockGh({
+        number: 1001,
+        title: "Child issue",
+        body: "Description",
+        url: "https://github.com/acme/repo/issues/1001",
+        state: "OPEN",
+        stateReason: null,
+        labels: [],
+        assignees: [],
+      });
+
+      await tracker.createIssue!(
+        { title: "Child issue", description: "Description", parentIssueId: "#42" },
+        project,
+      );
+
+      expect(ghMock).toHaveBeenNthCalledWith(
+        2,
+        "gh",
+        [
+          "api",
+          "--method",
+          "POST",
+          "repos/acme/repo/issues/42/sub_issues",
+          "-F",
+          "sub_issue_id=1001",
+        ],
+        expect.any(Object),
+      );
+    });
+
+    it("keeps issue creation working when GitHub sub-issue attachment fails", async () => {
+      mockGhRaw("https://github.com/acme/repo/issues/1002\n");
+      mockGhError("sub-issue API unavailable");
+      mockGh({
+        number: 1002,
+        title: "Child issue",
+        body: "Description",
+        url: "https://github.com/acme/repo/issues/1002",
+        state: "OPEN",
+        stateReason: null,
+        labels: [],
+        assignees: [],
+      });
+
+      const issue = await tracker.createIssue!(
+        { title: "Child issue", description: "Description", parentIssueId: "42" },
+        project,
+      );
+
+      expect(issue.id).toBe("1002");
+      expect(ghMock).toHaveBeenCalledTimes(3);
+    });
+
     it("throws when URL cannot be parsed from gh output", async () => {
       mockGhRaw("unexpected output");
       await expect(

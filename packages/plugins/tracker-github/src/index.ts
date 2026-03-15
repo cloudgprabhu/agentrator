@@ -109,6 +109,24 @@ function mapState(ghState: string, stateReason?: string | null): Issue["state"] 
   return "open";
 }
 
+async function attachSubIssue(
+  parentIssueId: string,
+  childIssueNumber: string,
+  project: ProjectConfig,
+): Promise<void> {
+  const parentNumber = parentIssueId.replace(/^#/, "").trim();
+  if (!/^\d+$/.test(parentNumber)) return;
+
+  await gh([
+    "api",
+    "--method",
+    "POST",
+    `repos/${project.repo}/issues/${parentNumber}/sub_issues`,
+    "-F",
+    `sub_issue_id=${childIssueNumber}`,
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // Tracker implementation
 // ---------------------------------------------------------------------------
@@ -347,6 +365,14 @@ function createGitHubTracker(): Tracker {
         throw new Error(`Failed to parse issue URL from gh output: ${url}`);
       }
       const number = match[1];
+
+      if (input.parentIssueId) {
+        try {
+          await attachSubIssue(input.parentIssueId, number, project);
+        } catch {
+          // Native hierarchy is best-effort; issue creation still succeeds via lineage and issue bodies.
+        }
+      }
 
       return this.getIssue(number, project);
     },

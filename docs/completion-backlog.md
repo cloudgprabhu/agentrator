@@ -37,7 +37,7 @@ These follow-up items have been implemented and merged:
 
 - **F01** Improve ambiguous legacy migration diagnostics — PR [#1](https://github.com/cloudgprabhu/agentrator/pull/1)
 - **F02** Parallelize auth profile status checks — PR [#2](https://github.com/cloudgprabhu/agentrator/pull/2)
-- **F04** Expand native tracker hierarchy only where justified — PR [#4](https://github.com/cloudgprabhu/agentrator/pull/4) (evaluated; maintain cross-platform lineage system)
+- **F04** Expand native tracker hierarchy only where justified — PR [#4](https://github.com/cloudgprabhu/agentrator/pull/4) (keep lineage baseline; add native hierarchy only where platform support is strong enough)
 - **F05** Keep lineage repair scope safe while exploring stronger recovery — PR [#3](https://github.com/cloudgprabhu/agentrator/pull/3)
 
 ## Remaining follow-up backlog
