@@ -74,6 +74,19 @@ export type {
   DecomposerConfig,
 } from "./decomposer.js";
 
+// Task lineage — safe lineage repair and validation
+export {
+  validateLineage,
+  repairLineage,
+  detectAmbiguousRelocation,
+  buildLineageArray,
+} from "./task-lineage.js";
+export type {
+  TaskLineageNode,
+  LineageRepairResult,
+  AmbiguousRelocationCandidate,
+} from "./task-lineage.js";
+
 // Orchestrator prompt — generates orchestrator context for `ao start`
 export { generateOrchestratorPrompt } from "./orchestrator-prompt.js";
 export type { OrchestratorPromptConfig } from "./orchestrator-prompt.js";
