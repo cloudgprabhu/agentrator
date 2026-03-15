@@ -60,6 +60,8 @@ export function SessionCard({ session, onSend, onKill, onMerge, onRestore }: Ses
   const isRestorable = isTerminal && session.status !== "merged";
 
   const title = getSessionTitle(session);
+  const runtimeBadges = getRuntimeBadges(session);
+  const workflowBadges = getWorkflowBadges(session);
 
   return (
     <div
@@ -121,6 +123,30 @@ export function SessionCard({ session, onSend, onKill, onMerge, onRestore }: Ses
           {title}
         </p>
       </div>
+
+      {(runtimeBadges.length > 0 || workflowBadges.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2">
+          {runtimeBadges.map((badge) => (
+            <span
+              key={badge.label}
+              className="rounded-[4px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]"
+            >
+              {badge.label}
+            </span>
+          ))}
+          {workflowBadges.map((badge) => (
+            <span
+              key={badge.label}
+              className={cn(
+                "rounded-[4px] border px-2 py-0.5 text-[10px] font-medium",
+                badge.className,
+              )}
+            >
+              {badge.label}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Meta row: branch + PR pills */}
       <div className="flex flex-wrap items-center gap-1.5 px-4 pb-2.5">
@@ -216,6 +242,82 @@ export function SessionCard({ session, onSend, onKill, onMerge, onRestore }: Ses
                 {session.issueLabel || session.issueUrl}
                 {session.issueTitle && `: ${session.issueTitle}`}
               </a>
+            </DetailSection>
+          )}
+
+          {session.workflow && (
+            <DetailSection label="Workflow">
+              <div className="space-y-2">
+                <div className="text-[12px] text-[var(--color-text-secondary)]">
+                  {session.workflow.parent.issueUrl ? (
+                    <a
+                      href={session.workflow.parent.issueUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[var(--color-accent)] hover:underline"
+                    >
+                      {session.workflow.parent.issueLabel}
+                    </a>
+                  ) : (
+                    <span>{session.workflow.parent.issueLabel}</span>
+                  )}
+                  {session.workflow.parent.issueTitle && `: ${session.workflow.parent.issueTitle}`}
+                  {" · "}
+                  {session.workflow.relationshipLabel}
+                </div>
+
+                <div className="flex flex-wrap gap-1">
+                  {session.workflow.children.slice(0, 4).map((child) => (
+                    <span
+                      key={child.issueId}
+                      className={cn(
+                        "rounded-[4px] border px-2 py-0.5 text-[11px]",
+                        child.isCurrent
+                          ? "border-[rgba(88,166,255,0.35)] bg-[rgba(88,166,255,0.08)] text-[var(--color-accent)]"
+                          : "border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] text-[var(--color-text-secondary)]",
+                      )}
+                    >
+                      {child.issueLabel} · {child.state}
+                    </span>
+                  ))}
+                  {session.workflow.children.length > 4 && (
+                    <span className="rounded-[4px] border border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)]">
+                      +{session.workflow.children.length - 4} more
+                    </span>
+                  )}
+                </div>
+
+                {(session.workflow.linkage || session.workflow.latestEvent) && (
+                  <div className="text-[11px] text-[var(--color-text-tertiary)]">
+                    {session.workflow.linkage?.prUrl && (
+                      <>
+                        <a
+                          href={session.workflow.linkage.prUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[var(--color-accent)] hover:underline"
+                        >
+                          {session.workflow.linkage.prNumber
+                            ? `PR #${session.workflow.linkage.prNumber}`
+                            : "PR"}
+                        </a>
+                        {session.workflow.linkage.prState && ` · ${session.workflow.linkage.prState}`}
+                        {(session.workflow.linkage.reviewSessionIds.length > 0 ||
+                          session.workflow.linkage.implementationSessionIds.length > 0) &&
+                          " · "}
+                      </>
+                    )}
+                    {session.workflow.linkage &&
+                      `implement ${session.workflow.linkage.implementationSessionIds.length} · review ${session.workflow.linkage.reviewSessionIds.length}`}
+                    {session.workflow.latestEvent && (
+                      <>
+                        {session.workflow.linkage && " · "}
+                        latest: {session.workflow.latestEvent.label}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </DetailSection>
           )}
 
@@ -377,4 +479,53 @@ function getAlerts(session: DashboardSession): Alert[] {
   }
 
   return alerts;
+}
+
+function getRuntimeBadges(session: DashboardSession): Array<{ label: string }> {
+  const runtime = session.runtime;
+  if (!runtime) return [];
+
+  return [
+    runtime.role ? { label: runtime.role } : null,
+    runtime.agent ? { label: runtime.agent } : null,
+    runtime.provider ? { label: runtime.provider } : null,
+    runtime.model ? { label: runtime.model } : null,
+    runtime.authProfile ? { label: runtime.authProfile } : null,
+  ].filter((badge): badge is { label: string } => badge !== null);
+}
+
+function getWorkflowBadges(
+  session: DashboardSession,
+): Array<{ label: string; className: string }> {
+  if (!session.workflow) return [];
+
+  return [
+    session.workflow.state
+      ? {
+          label: session.workflow.state,
+          className: getStateBadgeClassName(session.workflow.state),
+        }
+      : null,
+    {
+      label: session.workflow.relationshipLabel,
+      className:
+        "border-[var(--color-border-subtle)] bg-[rgba(255,255,255,0.04)] text-[var(--color-text-tertiary)]",
+    },
+  ].filter((badge): badge is { label: string; className: string } => badge !== null);
+}
+
+function getStateBadgeClassName(state: string): string {
+  switch (state) {
+    case "done":
+    case "approved":
+      return "border-[rgba(63,185,80,0.3)] bg-[rgba(63,185,80,0.12)] text-[var(--color-status-ready)]";
+    case "changes_requested":
+    case "blocked":
+      return "border-[rgba(248,81,73,0.3)] bg-[rgba(248,81,73,0.12)] text-[var(--color-status-error)]";
+    case "waiting_review":
+    case "pr_opened":
+      return "border-[rgba(210,153,34,0.3)] bg-[rgba(210,153,34,0.12)] text-[var(--color-status-attention)]";
+    default:
+      return "border-[rgba(88,166,255,0.3)] bg-[rgba(88,166,255,0.12)] text-[var(--color-accent)]";
+  }
 }

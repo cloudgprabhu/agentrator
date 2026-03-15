@@ -176,6 +176,8 @@ export interface Session {
 export interface SessionSpawnConfig {
   projectId: string;
   issueId?: string;
+  /** Optional role key to resolve modelProfile/authProfile/provider/agent for this spawn */
+  role?: string;
   branch?: string;
   prompt?: string;
   /** Override the agent plugin for this session (e.g. "codex", "claude-code") */
@@ -505,6 +507,8 @@ export interface CreateIssueInput {
   labels?: string[];
   assignee?: string;
   priority?: number;
+  /** Optional parent/root issue identifier for trackers that support native hierarchy */
+  parentIssueId?: string;
 }
 
 // =============================================================================
@@ -580,6 +584,12 @@ export interface SCM {
 
   /** Get automated review comments (bots, linters, security scanners) */
   getAutomatedComments(pr: PRInfo): Promise<AutomatedComment[]>;
+
+  /** Publish a review outcome to the SCM-native PR/MR review surface, if supported. */
+  publishReview?(
+    pr: PRInfo,
+    review: SCMReviewSubmission,
+  ): Promise<void>;
 
   // --- Merge Readiness ---
 
@@ -699,6 +709,11 @@ export interface AutomatedComment {
   severity: "error" | "warning" | "info";
   createdAt: Date;
   url: string;
+}
+
+export interface SCMReviewSubmission {
+  outcome: "approve" | "request_changes" | "comment";
+  summary: string;
 }
 
 // --- Merge Readiness ---
@@ -897,6 +912,21 @@ export interface OrchestratorConfig {
   /** Project configurations */
   projects: Record<string, ProjectConfig>;
 
+  /** Provider definitions used for model/auth resolution */
+  providers?: Record<string, ProviderConfig>;
+
+  /** Authentication profile definitions */
+  authProfiles?: Record<string, AuthProfileConfig>;
+
+  /** Model profile definitions */
+  modelProfiles?: Record<string, ModelProfileConfig>;
+
+  /** Role definitions mapped to model profiles */
+  roles?: Record<string, RoleConfig>;
+
+  /** Workflow role mappings */
+  workflow?: Record<string, WorkflowConfig>;
+
   /** Notification channel configs */
   notifiers: Record<string, NotifierConfig>;
 
@@ -987,6 +1017,199 @@ export interface ProjectConfig {
     /** Require human approval before executing decomposed plans (default: true) */
     requireApproval: boolean;
   };
+
+  /** Optional workflow config key selecting top-level workflow mapping */
+  workflow?: string;
+}
+
+export type ProviderKind =
+  | "anthropic"
+  | "openai"
+  | "bedrock"
+  | "azure-openai"
+  | "google"
+  | "custom"
+  | (string & {});
+
+export interface ProviderConfig {
+  /** Provider platform identifier (openai, anthropic, bedrock, etc.) */
+  kind: ProviderKind;
+  /** Optional display label */
+  displayName?: string;
+  /** Agent plugin used when role/model profile does not override it */
+  defaultAgentPlugin?: string;
+  /** Capability hints used for future reference validation */
+  capabilities?: {
+    browserAuth?: boolean;
+    apiAuth?: boolean;
+    supportsRoleOverride?: boolean;
+  };
+  /** Provider-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export type AuthProfileType =
+  | "browser-account"
+  | "api-key"
+  | "aws-profile"
+  | "console"
+  | (string & {});
+
+export interface AuthProfileConfig {
+  /** Auth strategy type */
+  type: AuthProfileType;
+  /** Optional provider key this auth profile belongs to */
+  provider?: string;
+  /** Optional display label */
+  displayName?: string;
+  /** Optional env var containing secret/token */
+  credentialEnvVar?: string;
+  /** Optional opaque credential reference (vault/keychain/secret id) */
+  credentialRef?: string;
+  /** Optional account type hint for browser-account profiles */
+  accountType?: "claude-pro" | "claude-max" | "chatgpt-plus" | "chatgpt-pro" | (string & {});
+  /** Auth-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export type AuthHealthState = "healthy" | "degraded" | "invalid" | "unconfigured";
+
+export interface ResolvedAuthProfile {
+  key: string;
+  profile: AuthProfileConfig;
+  providerKey?: string;
+  provider?: ProviderConfig;
+}
+
+export interface AuthHealthCheckResult {
+  state: AuthHealthState;
+  authStatus?: AuthStatusValue;
+  message: string;
+  checks: Array<{
+    key: string;
+    status: "pass" | "warn" | "fail";
+    detail: string;
+  }>;
+}
+
+export interface AuthHealthCheckOptions {
+  live?: boolean;
+}
+
+export interface AuthAdapterContext {
+  profileKey: string;
+  profile: AuthProfileConfig;
+  providerKey?: string;
+  provider?: ProviderConfig;
+}
+
+export type AuthStatusValue =
+  | "authenticated"
+  | "not_authenticated"
+  | "unavailable"
+  | "unsupported_environment";
+
+export interface AuthStatusResult {
+  status: AuthStatusValue;
+  message: string;
+}
+
+/**
+ * Pluggable auth adapter contract.
+ *
+ * Adapters can be bound to one or more providers/types and implement
+ * provider-specific auth health checks without exposing secrets.
+ */
+export interface AuthProviderAdapter {
+  name: string;
+  supports(context: AuthAdapterContext): boolean;
+  checkHealth(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
+  validateLive?(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
+  getStatus?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+  login?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+  logout?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+}
+
+export interface AuthManager {
+  resolveProfile(profileKey: string): ResolvedAuthProfile;
+  getProfileStatus(profileKey: string): Promise<AuthStatusResult>;
+  loginProfile(profileKey: string): Promise<AuthStatusResult>;
+  logoutProfile(profileKey: string): Promise<AuthStatusResult>;
+  checkProfileHealth(
+    profileKey: string,
+    options?: AuthHealthCheckOptions,
+  ): Promise<AuthHealthCheckResult>;
+  checkAllProfilesHealth(
+    options?: AuthHealthCheckOptions,
+  ): Promise<Record<string, AuthHealthCheckResult>>;
+}
+
+export interface ModelProfileConfig {
+  /** Optional provider key for this model profile */
+  provider?: string;
+  /** Optional explicit agent plugin */
+  agent?: string;
+  /** Optional auth profile key */
+  authProfile?: string;
+  /** Provider-native model ID */
+  model: string;
+  /** Optional runtime tuning knobs */
+  runtime?: Record<string, unknown>;
+  /** Optional rules file (relative to project path) to include in spawn prompt */
+  rulesFile?: string;
+  /** Optional role/model prompt prefix prepended to task instructions */
+  promptPrefix?: string;
+  /** Optional safety guardrails (string or list) appended to prompt */
+  guardrails?: string | string[];
+  /** Model-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface RoleConfig {
+  /** Optional description */
+  description?: string;
+  /** Required model profile key mapped to this role */
+  modelProfile: string;
+  /** Optional provider override */
+  provider?: string;
+  /** Optional auth profile override */
+  authProfile?: string;
+  /** Optional explicit agent plugin override */
+  agent?: string;
+  /** Optional rules file (relative to project path) to include in spawn prompt */
+  rulesFile?: string;
+  /** Optional role prompt prefix prepended to task instructions */
+  promptPrefix?: string;
+  /** Optional safety guardrails (string or list) appended to prompt */
+  guardrails?: string | string[];
+  /** Optional permission policy override */
+  permissions?: AgentPermissionMode;
+  /** Optional role-level prompt policy */
+  promptPolicy?: {
+    systemAppend?: string;
+    rulesFile?: string;
+    [key: string]: unknown;
+  };
+  /** Role-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface WorkflowConfig {
+  /** Role handling top-level parent issue orchestration */
+  parentIssueRole: string;
+  /** Role handling child issue implementation */
+  childIssueRole: string;
+  /** Role handling review cycles */
+  reviewRole: string;
+  /** Role handling CI-fix loops */
+  ciFixRole: string;
+  /** Workflow-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface TrackerConfig {
@@ -1112,16 +1335,26 @@ export interface PluginModule<T = unknown> {
  * (e.g., "a3b4c5d6e7f8-int-1").
  */
 export interface SessionMetadata {
+  sessionId?: string;
   worktree: string;
   branch: string;
   status: string;
   tmuxName?: string; // Globally unique tmux session name (includes hash)
   issue?: string;
+  issueId?: string;
   pr?: string;
   prAutoDetect?: "on" | "off";
   summary?: string;
   project?: string;
+  projectId?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
+  provider?: string;
+  authProfile?: string;
+  authMode?: AuthProfileType;
+  model?: string;
+  promptRulesFiles?: string;
+  promptPrefix?: string;
+  promptGuardrails?: string;
   createdAt?: string;
   runtimeHandle?: string;
   restoredAt?: string;

@@ -59,6 +59,15 @@ export interface PromptBuildConfig {
   /** Explicit user prompt (appended last) */
   userPrompt?: string;
 
+  /** Optional role/model-profile rule files (relative to project path) */
+  roleRulesFiles?: string[];
+
+  /** Optional role/model prompt prefix */
+  rolePromptPrefix?: string;
+
+  /** Optional role/model guardrails */
+  roleGuardrails?: string[];
+
   /** Decomposition context — ancestor task chain (from decomposer) */
   lineage?: string[];
 
@@ -118,6 +127,16 @@ function buildConfigLayer(config: PromptBuildConfig): string {
 // LAYER 3: USER RULES
 // =============================================================================
 
+function readRulesFile(projectPath: string, relativePath: string): string | null {
+  const filePath = resolve(projectPath, relativePath);
+  try {
+    const content = readFileSync(filePath, "utf-8").trim();
+    return content || null;
+  } catch {
+    return null;
+  }
+}
+
 function readUserRules(project: ProjectConfig): string | null {
   const parts: string[] = [];
 
@@ -126,14 +145,40 @@ function readUserRules(project: ProjectConfig): string | null {
   }
 
   if (project.agentRulesFile) {
-    const filePath = resolve(project.path, project.agentRulesFile);
-    try {
-      const content = readFileSync(filePath, "utf-8").trim();
-      if (content) {
-        parts.push(content);
-      }
-    } catch {
-      // File not found or unreadable — skip silently (don't crash the spawn)
+    const content = readRulesFile(project.path, project.agentRulesFile);
+    if (content) {
+      parts.push(content);
+    }
+  }
+
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function normalizeUniqueStrings(values: string[] | undefined): string[] {
+  if (!values) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
+function readRoleRules(project: ProjectConfig, files: string[] | undefined): string | null {
+  const normalizedFiles = normalizeUniqueStrings(files);
+  if (normalizedFiles.length === 0) return null;
+
+  const parts: string[] = [];
+  for (const relPath of normalizedFiles) {
+    const content = readRulesFile(project.path, relPath);
+    if (content && !parts.includes(content)) {
+      parts.push(content);
     }
   }
 
@@ -152,6 +197,9 @@ function readUserRules(project: ProjectConfig): string | null {
  */
 export function buildPrompt(config: PromptBuildConfig): string {
   const userRules = readUserRules(config.project);
+  const roleRules = readRoleRules(config.project, config.roleRulesFiles);
+  const normalizedRolePromptPrefix = config.rolePromptPrefix?.trim();
+  const normalizedRoleGuardrails = normalizeUniqueStrings(config.roleGuardrails);
   const sections: string[] = [];
 
   // Layer 1: Base prompt is always included for every managed session.
@@ -165,12 +213,27 @@ export function buildPrompt(config: PromptBuildConfig): string {
     sections.push(`## Project Rules\n${userRules}`);
   }
 
+  if (roleRules) {
+    sections.push(`## Role Rules\n${roleRules}`);
+  }
+
+  if (normalizedRolePromptPrefix) {
+    sections.push(`## Role Prompt Prefix\n${normalizedRolePromptPrefix}`);
+  }
+
+  if (normalizedRoleGuardrails.length > 0) {
+    const guardrailLines = normalizedRoleGuardrails.map((rule) => `- ${rule}`);
+    sections.push(`## Guardrails\n${guardrailLines.join("\n")}`);
+  }
+
   // Layer 4: Decomposition context (lineage + siblings)
   if (config.lineage && config.lineage.length > 0) {
     const hierarchy = config.lineage.map((desc, i) => `${"  ".repeat(i)}${i}. ${desc}`);
     // Add current task marker using issueId or last lineage entry
     const currentLabel = config.issueId ?? "this task";
-    hierarchy.push(`${"  ".repeat(config.lineage.length)}${config.lineage.length}. ${currentLabel}  <-- (this task)`);
+    hierarchy.push(
+      `${"  ".repeat(config.lineage.length)}${config.lineage.length}. ${currentLabel}  <-- (this task)`,
+    );
 
     sections.push(
       `## Task Hierarchy\nThis task is part of a larger decomposed plan. Your place in the hierarchy:\n\n\`\`\`\n${hierarchy.join("\n")}\n\`\`\`\n\nStay focused on YOUR specific task. Do not implement functionality that belongs to other tasks in the hierarchy.`,

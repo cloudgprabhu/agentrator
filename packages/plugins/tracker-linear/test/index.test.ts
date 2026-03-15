@@ -654,6 +654,25 @@ describe("tracker-linear plugin", () => {
       expect(body.variables.priority).toBe(1);
     });
 
+    it("passes parentId to native Linear issue hierarchy when parentIssueId is provided", async () => {
+      mockLinearAPI({
+        issue: { id: "parent-uuid-1" },
+      });
+      mockLinearAPI({
+        issueCreate: { success: true, issue: sampleIssueNode },
+      });
+
+      await tracker.createIssue!(
+        { title: "Bug", description: "", parentIssueId: "INT-42" },
+        project,
+      );
+
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      const writeCall = requestMock.mock.results[1].value.write.mock.calls[0][0];
+      const body = JSON.parse(writeCall);
+      expect(body.variables.parentId).toBe("parent-uuid-1");
+    });
+
     it("resolves assignee by display name after creation", async () => {
       // 1: create issue
       mockLinearAPI({

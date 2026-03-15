@@ -28,7 +28,7 @@ interface SpawnClaimOptions {
  * Validates runtime and tracker prerequisites so failures surface immediately
  * rather than repeating per-session in a batch.
  */
-async function runSpawnPreflight(
+export async function runSpawnPreflight(
   config: OrchestratorConfig,
   projectId: string,
   options?: SpawnClaimOptions,
@@ -52,6 +52,7 @@ async function spawnSession(
   issueId?: string,
   openTab?: boolean,
   agent?: string,
+  role?: string,
   claimOptions?: SpawnClaimOptions,
 ): Promise<string> {
   const spinner = ora("Creating session").start();
@@ -64,6 +65,7 @@ async function spawnSession(
       projectId,
       issueId,
       agent,
+      role,
     });
 
     let branchStr = session.branch ?? "";
@@ -126,6 +128,7 @@ export function registerSpawn(program: Command): void {
     .argument("[issue]", "Issue identifier (e.g. INT-1234, #42) - must exist in tracker")
     .option("--open", "Open session in terminal tab")
     .option("--agent <name>", "Override the agent plugin (e.g. codex, claude-code)")
+    .option("--role <role>", "Resolve and use a specific configured role for this spawn")
     .option("--claim-pr <pr>", "Immediately claim an existing PR for the spawned session")
     .option("--assign-on-github", "Assign the claimed PR to the authenticated GitHub user")
     .option("--decompose", "Decompose issue into subtasks before spawning")
@@ -137,6 +140,7 @@ export function registerSpawn(program: Command): void {
         opts: {
           open?: boolean;
           agent?: string;
+          role?: string;
           claimPr?: string;
           assignOnGithub?: boolean;
           decompose?: boolean;
@@ -191,7 +195,15 @@ export function registerSpawn(program: Command): void {
 
             if (leaves.length <= 1) {
               console.log(chalk.yellow("Task is atomic — spawning directly."));
-              await spawnSession(config, projectId, issueId, opts.open, opts.agent, claimOptions);
+              await spawnSession(
+                config,
+                projectId,
+                issueId,
+                opts.open,
+                opts.agent,
+                opts.role,
+                claimOptions,
+              );
             } else {
               // Create child issues and spawn sessions with lineage context
               const sm = await getSessionManager(config);
@@ -207,6 +219,7 @@ export function registerSpawn(program: Command): void {
                     lineage: leaf.lineage,
                     siblings,
                     agent: opts.agent,
+                    role: opts.role,
                   });
                   console.log(`  ${chalk.green("✓")} ${session.id} — ${leaf.description}`);
                 } catch (err) {
@@ -218,8 +231,57 @@ export function registerSpawn(program: Command): void {
               }
             }
           } else {
-            await spawnSession(config, projectId, issueId, opts.open, opts.agent, claimOptions);
+            await spawnSession(
+              config,
+              projectId,
+              issueId,
+              opts.open,
+              opts.agent,
+              opts.role,
+              claimOptions,
+            );
           }
+        } catch (err) {
+          console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
+          process.exit(1);
+        }
+      },
+    );
+}
+
+export function registerSpawnRole(program: Command): void {
+  program
+    .command("spawn-role")
+    .description("Spawn a single agent session using an explicit role")
+    .argument("<project>", "Project ID from config")
+    .argument("<role>", "Role key from config.roles")
+    .argument("[issue]", "Issue identifier (e.g. INT-1234, #42)")
+    .option("--open", "Open session in terminal tab")
+    .option(
+      "--agent <name>",
+      "Override the agent plugin (takes precedence over role-resolved agent)",
+    )
+    .action(
+      async (
+        projectId: string,
+        role: string,
+        issueId: string | undefined,
+        opts: { open?: boolean; agent?: string },
+      ) => {
+        const config = loadConfig();
+        if (!config.projects[projectId]) {
+          console.error(
+            chalk.red(
+              `Unknown project: ${projectId}\nAvailable: ${Object.keys(config.projects).join(", ")}`,
+            ),
+          );
+          process.exit(1);
+        }
+
+        try {
+          await runSpawnPreflight(config, projectId);
+          await ensureLifecycleWorker(config, projectId);
+          await spawnSession(config, projectId, issueId, opts.open, opts.agent, role);
         } catch (err) {
           console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
           process.exit(1);

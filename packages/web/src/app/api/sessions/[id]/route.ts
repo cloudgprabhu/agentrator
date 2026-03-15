@@ -7,6 +7,23 @@ import {
   enrichSessionsMetadata,
 } from "@/lib/serialize";
 
+const METADATA_ENRICH_TIMEOUT_MS = 3_000;
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<boolean>((resolve) => {
+    timeoutId = setTimeout(() => resolve(false), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise.then(() => true).catch(() => true), timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
@@ -19,11 +36,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
     const dashboardSession = sessionToDashboard(coreSession);
 
-    // Enrich metadata (issue labels, agent summaries, issue titles)
-    await enrichSessionsMetadata([coreSession], [dashboardSession], config, registry);
+    const metadataSettled = await settlesWithin(
+      enrichSessionsMetadata([coreSession], [dashboardSession], config, registry),
+      METADATA_ENRICH_TIMEOUT_MS,
+    );
 
     // Enrich PR — serve cache immediately, refresh in background if stale
-    if (coreSession.pr) {
+    if (metadataSettled && coreSession.pr) {
       const project = resolveProject(coreSession, config.projects);
       const scm = getSCM(registry, project);
       if (scm) {

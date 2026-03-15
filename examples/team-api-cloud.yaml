@@ -1,0 +1,101 @@
+# Team setup using API and cloud auth only.
+# Use this when browser login is not appropriate and all execution should
+# rely on shared env-managed credentials or cloud profiles.
+
+defaults:
+  runtime: tmux
+  agent: claude-code
+  workspace: worktree
+  notifiers: [desktop, slack]
+
+providers:
+  anthropic:
+    kind: anthropic
+    capabilities:
+      apiAuth: true
+  openai:
+    kind: openai
+    capabilities:
+      apiAuth: true
+  bedrock:
+    kind: bedrock
+    capabilities:
+      awsProfileAuth: true
+
+authProfiles:
+  anthropic-api:
+    type: api-key
+    provider: anthropic
+    credentialEnvVar: ANTHROPIC_API_KEY
+
+  openai-api:
+    type: api-key
+    provider: openai
+    credentialEnvVar: OPENAI_API_KEY
+
+  bedrock-team:
+    type: aws-profile
+    provider: bedrock
+    options:
+      profileRef: engineering-shared
+
+modelProfiles:
+  planner-model:
+    provider: openai
+    agent: codex
+    authProfile: openai-api
+    model: o3
+
+  implementer-model:
+    provider: anthropic
+    agent: claude-code
+    authProfile: anthropic-api
+    model: claude-sonnet-4-20250514
+
+  reviewer-model:
+    provider: bedrock
+    agent: claude-code
+    authProfile: bedrock-team
+    model: anthropic.claude-3-7-sonnet
+
+roles:
+  planner:
+    modelProfile: planner-model
+
+  implementer:
+    modelProfile: implementer-model
+
+  reviewer:
+    modelProfile: reviewer-model
+    rulesFile: .ao/reviewer-rules.md
+
+workflow:
+  default:
+    parentIssueRole: planner
+    childIssueRole: implementer
+    reviewRole: reviewer
+    ciFixRole: implementer
+
+projects:
+  api-platform:
+    name: API Platform
+    repo: org/api-platform
+    path: ~/src/api-platform
+    defaultBranch: main
+    sessionPrefix: api
+    tracker:
+      plugin: linear
+      teamId: "your-linear-team-id"
+    workflow: default
+
+notifiers:
+  slack:
+    plugin: slack
+    webhook: ${SLACK_WEBHOOK_URL}
+    channel: "#agent-orchestrator"
+
+notificationRouting:
+  urgent: [desktop, slack]
+  action: [desktop, slack]
+  warning: [slack]
+  info: [slack]

@@ -565,6 +565,34 @@ describe("start command — URL argument", () => {
 // ---------------------------------------------------------------------------
 
 describe("start command — browser open waits for port", () => {
+  it("starts the orchestrator from a legacy single-agent config without workflow schema", async () => {
+    mockConfigRef.current = makeConfig({
+      "my-app": {
+        repo: "org/my-app",
+        path: join(tmpDir, "main-repo"),
+        defaultBranch: "main",
+      },
+    });
+
+    mockSessionManager.get.mockResolvedValue(null);
+    mockSessionManager.spawnOrchestrator.mockResolvedValue({
+      id: "app-orchestrator",
+      runtimeHandle: { id: "tmux-session-1" },
+      metadata: {},
+    });
+
+    await program.parseAsync(["node", "test", "start", "--no-dashboard"]);
+
+    expect(mockSessionManager.spawnOrchestrator).toHaveBeenCalledWith({
+      projectId: "my-app",
+      systemPrompt: expect.any(String),
+    });
+    expect(mockEnsureLifecycleWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ configPath: expect.any(String) }),
+      "my-app",
+    );
+  });
+
   it("calls waitForPortAndOpen with orchestrator URL and AbortSignal", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
 

@@ -130,6 +130,78 @@ describe("buildPrompt", () => {
     expect(result).not.toContain("## Project Rules");
   });
 
+  it("includes role rules from role/model rules files", () => {
+    writeFileSync(join(tmpDir, "model-rules.md"), "Model rule: prefer safer migrations.");
+    writeFileSync(join(tmpDir, "role-rules.md"), "Role rule: start with a short plan.");
+
+    const result = buildPrompt({
+      project,
+      projectId: "test-app",
+      issueId: "INT-1343",
+      roleRulesFiles: ["model-rules.md", "role-rules.md"],
+    });
+
+    expect(result).toContain("## Role Rules");
+    expect(result).toContain("Model rule: prefer safer migrations.");
+    expect(result).toContain("Role rule: start with a short plan.");
+  });
+
+  it("includes role promptPrefix and guardrails", () => {
+    const result = buildPrompt({
+      project,
+      projectId: "test-app",
+      issueId: "INT-1343",
+      rolePromptPrefix: "Think through edge cases before coding.",
+      roleGuardrails: ["Do not weaken auth checks", "Keep PR scope focused"],
+    });
+
+    expect(result).toContain("## Role Prompt Prefix");
+    expect(result).toContain("Think through edge cases before coding.");
+    expect(result).toContain("## Guardrails");
+    expect(result).toContain("- Do not weaken auth checks");
+    expect(result).toContain("- Keep PR scope focused");
+  });
+
+  it("dedupes repeated role rules files and guardrails", () => {
+    writeFileSync(join(tmpDir, "shared-rules.md"), "Shared role rule.");
+
+    const result = buildPrompt({
+      project,
+      projectId: "test-app",
+      issueId: "INT-1343",
+      roleRulesFiles: [" shared-rules.md ", "shared-rules.md"],
+      rolePromptPrefix: "  Think through edge cases before coding.  ",
+      roleGuardrails: [
+        " Keep PR scope focused ",
+        "Keep PR scope focused",
+        "",
+        "Do not weaken auth checks",
+      ],
+    });
+
+    expect(result).toContain("## Role Rules");
+    expect(result.match(/Shared role rule\./g)).toHaveLength(1);
+    expect(result).toContain("## Role Prompt Prefix");
+    expect(result).toContain("Think through edge cases before coding.");
+    expect(result.match(/- Keep PR scope focused/g)).toHaveLength(1);
+    expect(result.match(/- Do not weaken auth checks/g)).toHaveLength(1);
+  });
+
+  it("applies role rules after project rules", () => {
+    project.agentRules = "Project baseline rule.";
+    writeFileSync(join(tmpDir, "role-rules.md"), "Role-specific rule.");
+
+    const result = buildPrompt({
+      project,
+      projectId: "test-app",
+      roleRulesFiles: ["role-rules.md"],
+    });
+
+    const projectRuleIdx = result.indexOf("Project baseline rule.");
+    const roleRuleIdx = result.indexOf("Role-specific rule.");
+    expect(projectRuleIdx).toBeLessThan(roleRuleIdx);
+  });
+
   it("appends userPrompt last", () => {
     project.agentRules = "Project rule.";
     const result = buildPrompt({

@@ -181,7 +181,7 @@ beforeEach(() => {
   };
 
   // Calculate sessions directory
-  sessionsDir = getSessionsDir(configPath, project.path);
+  sessionsDir = getSessionsDir(configPath, "my-app");
   mkdirSync(sessionsDir, { recursive: true });
 });
 

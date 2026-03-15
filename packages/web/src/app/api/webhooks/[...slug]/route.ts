@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Tracker } from "@composio/ao-core";
 import { getServices } from "@/lib/services";
 import {
   buildWebhookRequest,
@@ -6,6 +7,7 @@ import {
   findAffectedSessions,
   findWebhookProjects,
 } from "@/lib/scm-webhooks";
+import { maybeAutoSpawnWorkflowReviewer } from "@/lib/workflow-review-handoff";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +55,8 @@ export async function POST(request: Request): Promise<Response> {
     const errors: string[] = [];
     const parseErrors: string[] = [];
     const lifecycleErrors: string[] = [];
+    const reviewSessionIds = new Set<string>();
+    const reviewSkips: string[] = [];
 
     for (const candidate of candidates) {
       const verification = await candidate.scm.verifyWebhook?.(webhookRequest, candidate.project);
@@ -76,6 +80,38 @@ export async function POST(request: Request): Promise<Response> {
 
       projectIds.add(candidate.projectId);
       const affectedSessions = findAffectedSessions(sessions, candidate.projectId, event);
+      const tracker = candidate.project.tracker
+        ? services.registry.get<Tracker>("tracker", candidate.project.tracker.plugin)
+        : null;
+      if (tracker) {
+        try {
+          const reviewHandoff = await maybeAutoSpawnWorkflowReviewer({
+            config: services.config,
+            projectId: candidate.projectId,
+            project: candidate.project,
+            tracker,
+            sessionManager: services.sessionManager,
+            sessions,
+            event,
+          });
+          if (reviewHandoff?.spawnedSessionId) {
+            reviewSessionIds.add(reviewHandoff.spawnedSessionId);
+          } else if (reviewHandoff?.skippedReason) {
+            reviewSkips.push(
+              [
+                candidate.projectId,
+                reviewHandoff.parentIssue ?? "-",
+                reviewHandoff.childIssueId ?? "-",
+                reviewHandoff.skippedReason,
+              ].join(":"),
+            );
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Workflow review handoff failed";
+          lifecycleErrors.push(`workflow review handoff: ${message}`);
+        }
+      }
+
       if (affectedSessions.length === 0) {
         continue;
       }
@@ -105,6 +141,8 @@ export async function POST(request: Request): Promise<Response> {
         projectIds: [...projectIds],
         sessionIds: [...sessionIds],
         matchedSessions: sessionIds.size,
+        reviewSessionIds: [...reviewSessionIds],
+        reviewSkips,
         parseErrors,
         lifecycleErrors,
       },

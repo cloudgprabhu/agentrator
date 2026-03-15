@@ -47,6 +47,7 @@ pnpm dev
 
 ```
 agent-orchestrator/
+├── .codex/skills/        # Repo-local Codex skills for contributor workflows
 ├── packages/
 │   ├── core/              # Core types, services, config
 │   ├── cli/               # CLI tool (ao command)
@@ -65,6 +66,10 @@ agent-orchestrator/
 ├── .husky/                # Git hooks
 └── docs/                  # Documentation
 ```
+
+## Repo-Local Codex Skill
+
+Use `$agent-orchestrator-feature-development` for feature work in this repository. The skill lives at `.codex/skills/agent-orchestrator-feature-development/` and captures the repo-specific workflow for adding features without missing coupled updates in config, docs, examples, or tests.
 
 ## Development Workflow
 

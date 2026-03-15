@@ -68,6 +68,8 @@ Then spawn agents:
 
 ```bash
 ao spawn my-project 123    # GitHub issue, Linear ticket, or ad-hoc
+ao spawn --role planner my-project 123
+ao spawn-role my-project planner 123
 ```
 
 Dashboard opens at `http://localhost:3000`. Run `ao status` for the CLI view.
@@ -89,16 +91,16 @@ ao spawn my-project 123
 
 Eight slots. Every abstraction is swappable.
 
-| Slot | Default | Alternatives |
-|------|---------|-------------|
-| Runtime | tmux | docker, k8s, process |
-| Agent | claude-code | codex, aider, opencode |
-| Workspace | worktree | clone |
-| Tracker | github | linear |
-| SCM | github | — |
-| Notifier | desktop | slack, composio, webhook |
-| Terminal | iterm2 | web |
-| Lifecycle | core | — |
+| Slot      | Default     | Alternatives             |
+| --------- | ----------- | ------------------------ |
+| Runtime   | tmux        | docker, k8s, process     |
+| Agent     | claude-code | codex, aider, opencode   |
+| Workspace | worktree    | clone                    |
+| Tracker   | github      | linear                   |
+| SCM       | github      | —                        |
+| Notifier  | desktop     | slack, composio, webhook |
+| Terminal  | iterm2      | web                      |
+| Lifecycle | core        | —                        |
 
 All interfaces defined in [`packages/core/src/types.ts`](packages/core/src/types.ts). A plugin implements one interface and exports a `PluginModule`. That's it.
 
@@ -131,7 +133,7 @@ reactions:
     action: send-to-agent
     escalateAfter: 30m
   approved-and-green:
-    auto: false       # flip to true for auto-merge
+    auto: false # flip to true for auto-merge
     action: notify
 ```
 
@@ -139,16 +141,64 @@ CI fails → agent gets the logs and fixes it. Reviewer requests changes → age
 
 See [`agent-orchestrator.yaml.example`](agent-orchestrator.yaml.example) for the full reference.
 
+Project IDs come from the keys under `projects:`, not from the repo path basename. That means
+configs like `projects: { planner: { path: ~/shared-repo }, implementer: { path: ~/shared-repo } }`
+create two distinct logical projects with separate session state, worktrees, and dashboard routing
+even though they point at the same checkout path.
+
 ## CLI
 
 ```bash
 ao status                              # Overview of all sessions
+ao status --verbose                    # Include role/model/auth/workflow metadata
 ao spawn <project> [issue]             # Spawn an agent
+ao spawn --role <role> <project> [issue]
+ao spawn-role <project> <role> [issue] # Spawn with explicit role resolution
+ao workflow plan <project> <issue>     # Spawn the planner and verify a valid task-plan artifact
+ao workflow validate-plan <file>       # Validate a YAML task-plan artifact
+ao workflow create-issues <project> <file> # Create child tracker issues from a task plan
+ao workflow implement <project> <issue>    # Spawn implementer sessions for eligible child issues
+ao workflow review <project> <ref>         # Spawn reviewer session for a child issue or PR
+ao workflow review-outcome <project> <ref> # Record reviewer outcome and route follow-up work
+ao workflow set-state <project> <ref> <state> # Manually move a workflow child issue between valid states
+ao workflow relocate-task-plan <project> <issue> <path> # Persist a moved task-plan path into lineage
+ao workflow lineage <project> <issue>  # Show workflow lineage for a parent issue
+ao workflow audit-lineage <project> [issue]  # Audit or repair workflow lineage artifacts
+ao auth list                           # List configured auth profiles
+ao auth status                         # Check auth state for each profile
+ao auth status --json                  # Emit machine-readable auth status for scripts and dashboards
+ao auth status --live                  # Run opt-in live validation where supported
+ao auth login <profile>                # Run provider-specific login flow
+ao auth logout <profile>               # Run provider-specific logout flow
 ao send <session> "Fix the tests"      # Send instructions
 ao session ls                          # List sessions
 ao session kill <session>              # Kill a session
 ao session restore <session>           # Revive a crashed agent
 ao dashboard                           # Open web dashboard
+```
+
+When both `--role` and `--agent` are provided, `--agent` takes precedence for agent plugin
+selection, while provider/auth/model/runtime settings still resolve from the selected role.
+
+Workflow child issue creation always preserves cross-platform linkage in lineage artifacts and issue
+bodies. Trackers that support native issue hierarchy can also attach child issues to the parent
+issue directly; the current repo implements that natively for Linear.
+
+Auth commands only show profile names, types, providers, and reference presence. They do not print
+inline secrets, tokens, or credential values.
+
+Verbose status output adds resolved session metadata such as `projectId`, `role`, `agent`,
+`provider`, `model`, `authProfile`, `authMode`, `issueId`, and workflow lineage context when the
+issue participates in a task-plan lineage.
+
+Example:
+
+```text
+My App
+  Session       Branch                  PR    CI    Rev   Thr Activity Age
+  ──────────────────────────────────────────────────────────────────────────
+  app-7         feat/status-metadata    #88   pass  ok    0   ready    2m
+                project=my-app  role=reviewer  agent=codex  provider=openai  model=gpt-5-codex  authProfile=openai-browser  authMode=browser-account  issueId=INT-42-1  workflow=waiting_review  relation=child of INT-42
 ```
 
 ## Why Agent Orchestrator?
@@ -178,12 +228,20 @@ See [CLAUDE.md](CLAUDE.md) for code conventions and architecture details.
 
 ## Documentation
 
-| Doc | What it covers |
-|-----|---------------|
-| [Setup Guide](SETUP.md) | Detailed installation and configuration |
-| [Examples](examples/) | Config templates (GitHub, Linear, multi-project, auto-merge) |
-| [CLAUDE.md](CLAUDE.md) | Architecture, conventions, plugin pattern |
-| [Troubleshooting](TROUBLESHOOTING.md) | Common issues and fixes |
+| Doc                                   | What it covers                                               |
+| ------------------------------------- | ------------------------------------------------------------ |
+| [Setup Guide](SETUP.md)               | Detailed installation and configuration                      |
+| [Examples](examples/)                 | Config templates (GitHub, Linear, multi-project, auto-merge) |
+| [CLAUDE.md](CLAUDE.md)                | Architecture, conventions, plugin pattern                    |
+| [Troubleshooting](TROUBLESHOOTING.md) | Common issues and fixes                                      |
+| [Workflow Planning](docs/workflow-planning.md) | Planner-session workflow and plan artifact usage            |
+| [Task Plan Format](docs/task-plan-format.md) | Canonical YAML schema for planner output                    |
+| [Workflow Lineage](docs/workflow-lineage.md) | Parent/child/session/PR lineage model and query surface     |
+| [Completion Backlog](docs/completion-backlog.md) | Ordered implementation backlog for remaining open project work |
+| [Test Strategy](docs/testing/test-strategy.md) | Fork-wide test pyramid, ownership, fixtures, and CI recommendations |
+| [Unit Test Cases](docs/testing/unit-test-cases.md) | Detailed unit-level case catalog for fork-specific behavior |
+| [Integration Test Cases](docs/testing/integration-test-cases.md) | End-to-end and multi-module scenario catalog for the fork   |
+| [Manual Smoke Tests](docs/testing/manual-smoke-tests.md) | Operator checklist for local end-to-end verification on real setups |
 
 ## Contributing
 

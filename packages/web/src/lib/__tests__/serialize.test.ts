@@ -2,16 +2,19 @@
  * Tests for session serialization and PR enrichment
  */
 
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type {
-  Session,
-  PRInfo,
-  SCM,
-  Agent,
-  Tracker,
-  ProjectConfig,
-  OrchestratorConfig,
-  PluginRegistry,
+import {
+  type Session,
+  type PRInfo,
+  type SCM,
+  type Agent,
+  type Tracker,
+  type ProjectConfig,
+  type OrchestratorConfig,
+  type PluginRegistry,
+  taskLineageToYaml,
 } from "@composio/ao-core";
 import {
   sessionToDashboard,
@@ -124,6 +127,51 @@ describe("sessionToDashboard", () => {
     expect(dashboard.branch).toBe("feat/test");
     expect(dashboard.createdAt).toBe("2025-01-01T00:00:00.000Z");
     expect(dashboard.lastActivityAt).toBe("2025-01-01T01:00:00.000Z");
+  });
+
+  it("should seed runtime identity from session metadata", () => {
+    const coreSession = createCoreSession({
+      metadata: {
+        role: "implementer",
+        agent: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+      },
+    });
+
+    const dashboard = sessionToDashboard(coreSession);
+
+    expect(dashboard.runtime).toEqual({
+      role: "implementer",
+      agent: "codex",
+      provider: "openai",
+      model: "gpt-5",
+      authProfile: "chatgpt-pro",
+      authMode: "browser-account",
+      promptPolicy: null,
+    });
+    expect(dashboard.workflow).toBeNull();
+  });
+
+  it("should seed persisted prompt policy metadata from session metadata", () => {
+    const coreSession = createCoreSession({
+      metadata: {
+        promptRulesFiles: JSON.stringify([".ao/model-rules.md", ".ao/role-rules.md"]),
+        promptPrefix: "Plan first, then implement.",
+        promptGuardrails: JSON.stringify(["Never force push", "Always run tests"]),
+      },
+    });
+
+    const dashboard = sessionToDashboard(coreSession);
+
+    expect(dashboard.runtime?.promptPolicy).toEqual({
+      rulesFiles: [".ao/model-rules.md", ".ao/role-rules.md"],
+      promptPrefix: "Plan first, then implement.",
+      guardrails: ["Never force push", "Always run tests"],
+      source: "metadata",
+    });
   });
 
   it("should use agentInfo summary with summaryIsFallback false", () => {
@@ -789,6 +837,43 @@ describe("enrichSessionsMetadata", () => {
     readyThresholdMs: 300000,
   } as OrchestratorConfig;
 
+  const promptPolicyConfig = {
+    ...testConfig,
+    defaults: { ...testConfig.defaults, agent: "codex" },
+    providers: {
+      openai: { kind: "openai" },
+    },
+    authProfiles: {
+      openaiApi: {
+        type: "api-key",
+        provider: "openai",
+        credentialEnvVar: "OPENAI_API_KEY",
+      },
+    },
+    modelProfiles: {
+      implementerModel: {
+        provider: "openai",
+        agent: "codex",
+        authProfile: "openaiApi",
+        model: "gpt-5-codex",
+        rulesFile: ".ao/model-rules.md",
+        promptPrefix: "Model guidance",
+        guardrails: ["Never force push"],
+      },
+    },
+    roles: {
+      implementer: {
+        modelProfile: "implementerModel",
+        rulesFile: ".ao/role-rules.md",
+        promptPrefix: "Role guidance",
+        guardrails: ["Always run tests"],
+      },
+    },
+    projects: {
+      test: { ...testProject, agent: "codex" },
+    },
+  } as OrchestratorConfig;
+
   it("should enrich issue labels, agent summaries, and issue titles", async () => {
     const tracker = mockTracker("Fix auth bug");
     const agent = mockAgent("Implementing auth fix");
@@ -822,6 +907,49 @@ describe("enrichSessionsMetadata", () => {
     expect(tracker.getIssue).not.toHaveBeenCalled();
     // Summary still enriched (independent of issue)
     expect(dashboard.summary).toBe("Working on feature");
+  });
+
+  it("should resolve prompt policy provenance from config when metadata is missing", async () => {
+    const registry = mockRegistry(mockTracker(), mockAgent());
+    const core = createCoreSession({
+      metadata: {
+        role: "implementer",
+        agent: "codex",
+      },
+    });
+    const dashboard = sessionToDashboard(core);
+
+    await enrichSessionsMetadata([core], [dashboard], promptPolicyConfig, registry);
+
+    expect(dashboard.runtime?.promptPolicy).toEqual({
+      rulesFiles: [".ao/model-rules.md", ".ao/role-rules.md"],
+      promptPrefix: "Role guidance",
+      guardrails: ["Never force push", "Always run tests"],
+      source: "resolved-config",
+    });
+  });
+
+  it("should prefer persisted prompt policy metadata over config recomputation", async () => {
+    const registry = mockRegistry(mockTracker(), mockAgent());
+    const core = createCoreSession({
+      metadata: {
+        role: "implementer",
+        agent: "codex",
+        promptRulesFiles: JSON.stringify(["persisted-rules.md"]),
+        promptPrefix: "Persisted prompt prefix",
+        promptGuardrails: JSON.stringify(["Persisted guardrail"]),
+      },
+    });
+    const dashboard = sessionToDashboard(core);
+
+    await enrichSessionsMetadata([core], [dashboard], promptPolicyConfig, registry);
+
+    expect(dashboard.runtime?.promptPolicy).toEqual({
+      rulesFiles: ["persisted-rules.md"],
+      promptPrefix: "Persisted prompt prefix",
+      guardrails: ["Persisted guardrail"],
+      source: "metadata",
+    });
   });
 
   it("should skip summary enrichment when session already has one", async () => {
@@ -945,6 +1073,177 @@ describe("enrichSessionsMetadata", () => {
     // Falls back to config.defaults.agent
     expect(registry.get).toHaveBeenCalledWith("agent", "mock-agent");
     expect(dashboard.summary).toBe("From default agent");
+  });
+
+  it("should enrich runtime identity and workflow lineage context", async () => {
+    const projectPath = "/tmp/ao-web-serialize-workflow";
+    rmSync(projectPath, { recursive: true, force: true });
+    mkdirSync(join(projectPath, "docs", "plans"), { recursive: true });
+    writeFileSync(
+      join(projectPath, "docs", "plans", "int-42.lineage.yaml"),
+      taskLineageToYaml({
+        version: 1,
+        projectId: "test",
+        parentIssue: "INT-42",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        trackerPlugin: "mock-tracker",
+        createdAt: "2026-03-14T09:00:00.000Z",
+        updatedAt: "2026-03-14T10:00:00.000Z",
+        planningSession: {
+          sessionId: "planner-1",
+          role: "planner",
+          branch: "feat/int-42-plan",
+          worktreePath: "/tmp/worktrees/planner-1",
+          createdAt: "2026-03-14T09:00:00.000Z",
+        },
+        childIssues: [
+          {
+            taskIndex: 0,
+            title: "Build dashboard",
+            issueId: "INT-101",
+            issueUrl: "https://linear.app/test/INT-101",
+            issueLabel: "INT-101",
+            labels: ["workflow"],
+            dependencies: [],
+            state: "waiting_review",
+            implementationSessions: [
+              {
+                sessionId: "impl-1",
+                role: "implementer",
+                branch: "feat/int-101-dashboard",
+                worktreePath: "/tmp/worktrees/impl-1",
+                createdAt: "2026-03-14T09:10:00.000Z",
+              },
+            ],
+            reviewSessions: [
+              {
+                sessionId: "review-1",
+                role: "reviewer",
+                branch: "feat/int-101-dashboard",
+                worktreePath: "/tmp/worktrees/review-1",
+                createdAt: "2026-03-14T09:20:00.000Z",
+              },
+            ],
+            pr: {
+              number: 101,
+              url: "https://github.com/test/repo/pull/101",
+              branch: "feat/int-101-dashboard",
+              state: "open",
+              updatedAt: "2026-03-14T09:30:00.000Z",
+            },
+          },
+        ],
+      }),
+    );
+
+    const tracker = mockTracker("Ship workflow dashboard");
+    const agent = mockAgent("Implementing dashboard");
+    const registry = mockRegistry(tracker, agent);
+    const workflowConfig = {
+      ...testConfig,
+      projects: {
+        test: { ...testProject, path: projectPath, agent: undefined } as ProjectConfig,
+      },
+    } as OrchestratorConfig;
+    const core = createCoreSession({
+      id: "review-1",
+      issueId: "INT-101",
+      metadata: {
+        role: "reviewer",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+      },
+    });
+    const dashboard = sessionToDashboard(core);
+
+    await enrichSessionsMetadata([core], [dashboard], workflowConfig, registry);
+
+    expect(dashboard.runtime).toEqual({
+      role: "reviewer",
+      agent: "mock-agent",
+      provider: "openai",
+      model: "gpt-5",
+      authProfile: "chatgpt-pro",
+      authMode: "browser-account",
+      promptPolicy: null,
+    });
+    expect(dashboard.workflow?.parent.issueLabel).toBe("#42");
+    expect(dashboard.workflow?.currentChild?.issueLabel).toBe("INT-101");
+    expect(dashboard.workflow?.state).toBe("waiting_review");
+    expect(dashboard.workflow?.linkage?.prNumber).toBe(101);
+    expect(dashboard.workflow?.latestEvent?.label).toBe("Lineage updated");
+  });
+
+  it("should surface blocked workflow state from lineage in dashboard metadata", async () => {
+    const projectPath = "/tmp/ao-web-serialize-blocked";
+    rmSync(projectPath, { recursive: true, force: true });
+    mkdirSync(join(projectPath, "docs", "plans"), { recursive: true });
+    writeFileSync(
+      join(projectPath, "docs", "plans", "int-42.lineage.yaml"),
+      taskLineageToYaml({
+        version: 1,
+        projectId: "test",
+        parentIssue: "INT-42",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        trackerPlugin: "mock-tracker",
+        createdAt: "2026-03-14T09:00:00.000Z",
+        updatedAt: "2026-03-14T10:00:00.000Z",
+        planningSession: null,
+        childIssues: [
+          {
+            taskIndex: 0,
+            title: "Unblock rollout",
+            issueId: "INT-101",
+            issueUrl: "https://linear.app/test/INT-101",
+            issueLabel: "INT-101",
+            labels: ["workflow"],
+            dependencies: [],
+            state: "blocked",
+            implementationSessions: [
+              {
+                sessionId: "impl-1",
+                role: "implementer",
+                branch: "feat/int-101-rollout",
+                worktreePath: "/tmp/worktrees/impl-1",
+                createdAt: "2026-03-14T09:10:00.000Z",
+              },
+            ],
+            reviewSessions: [],
+            pr: null,
+          },
+        ],
+      }),
+    );
+
+    const tracker = mockTracker("Ship workflow dashboard");
+    const agent = mockAgent("Investigating blocker");
+    const registry = mockRegistry(tracker, agent);
+    const workflowConfig = {
+      ...testConfig,
+      projects: {
+        test: { ...testProject, path: projectPath, agent: undefined } as ProjectConfig,
+      },
+    } as OrchestratorConfig;
+    const core = createCoreSession({
+      id: "impl-1",
+      issueId: "INT-101",
+      metadata: {
+        role: "implementer",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+      },
+    });
+    const dashboard = sessionToDashboard(core);
+
+    await enrichSessionsMetadata([core], [dashboard], workflowConfig, registry);
+
+    expect(dashboard.workflow?.state).toBe("blocked");
+    expect(dashboard.workflow?.currentChild?.state).toBe("blocked");
+    expect(dashboard.workflow?.children[0]?.state).toBe("blocked");
   });
 });
 

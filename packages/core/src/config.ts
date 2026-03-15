@@ -11,12 +11,14 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { resolve, join, basename } from "node:path";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { OrchestratorConfig } from "./types.js";
 import { generateSessionPrefix } from "./paths.js";
+import { hasInlineSecretValues } from "./auth-profile-resolver.js";
+import { validateProviderCompatibility } from "./provider-registry.js";
 
 function inferScmPlugin(project: {
   repo: string;
@@ -90,10 +92,90 @@ const NotifierConfigSchema = z
   })
   .passthrough();
 
+const ProviderConfigSchema = z
+  .object({
+    kind: z.string(),
+    displayName: z.string().optional(),
+    defaultAgentPlugin: z.string().optional(),
+    capabilities: z
+      .object({
+        browserAuth: z.boolean().optional(),
+        apiAuth: z.boolean().optional(),
+        supportsRoleOverride: z.boolean().optional(),
+      })
+      .optional(),
+    options: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const AuthProfileConfigSchema = z
+  .object({
+    type: z.enum(["browser-account", "api-key", "aws-profile", "console"]),
+    provider: z.string().optional(),
+    displayName: z.string().optional(),
+    credentialEnvVar: z.string().optional(),
+    credentialRef: z.string().optional(),
+    accountType: z.string().optional(),
+    options: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const ModelProfileConfigSchema = z
+  .object({
+    provider: z.string().optional(),
+    agent: z.string().optional(),
+    authProfile: z.string().optional(),
+    model: z.string(),
+    runtime: z.record(z.unknown()).optional(),
+    rulesFile: z.string().optional(),
+    promptPrefix: z.string().optional(),
+    guardrails: z.union([z.string(), z.array(z.string())]).optional(),
+    options: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const RolePromptPolicySchema = z
+  .object({
+    systemAppend: z.string().optional(),
+    rulesFile: z.string().optional(),
+  })
+  .passthrough();
+
 const AgentPermissionSchema = z
   .enum(["permissionless", "default", "auto-edit", "suggest", "skip"])
   .default("permissionless")
   .transform((value) => (value === "skip" ? "permissionless" : value));
+
+const OptionalAgentPermissionSchema = z
+  .enum(["permissionless", "default", "auto-edit", "suggest", "skip"])
+  .transform((value) => (value === "skip" ? "permissionless" : value))
+  .optional();
+
+const RoleConfigSchema = z
+  .object({
+    description: z.string().optional(),
+    modelProfile: z.string(),
+    provider: z.string().optional(),
+    authProfile: z.string().optional(),
+    agent: z.string().optional(),
+    rulesFile: z.string().optional(),
+    promptPrefix: z.string().optional(),
+    guardrails: z.union([z.string(), z.array(z.string())]).optional(),
+    permissions: OptionalAgentPermissionSchema,
+    promptPolicy: RolePromptPolicySchema.optional(),
+    options: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+
+const WorkflowConfigSchema = z
+  .object({
+    parentIssueRole: z.string(),
+    childIssueRole: z.string(),
+    reviewRole: z.string(),
+    ciFixRole: z.string(),
+    options: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
 
 const AgentSpecificConfigSchema = z
   .object({
@@ -139,6 +221,7 @@ const ProjectConfigSchema = z.object({
   agentRules: z.string().optional(),
   agentRulesFile: z.string().optional(),
   orchestratorRules: z.string().optional(),
+  workflow: z.string().optional(),
   orchestratorSessionStrategy: z
     .enum(["reuse", "delete", "ignore", "delete-new", "ignore-new", "kill-previous"])
     .optional(),
@@ -159,6 +242,11 @@ const OrchestratorConfigSchema = z.object({
   directTerminalPort: z.number().optional(),
   readyThresholdMs: z.number().nonnegative().default(300_000),
   defaults: DefaultPluginsSchema.default({}),
+  providers: z.record(ProviderConfigSchema).default({}),
+  authProfiles: z.record(AuthProfileConfigSchema).default({}),
+  modelProfiles: z.record(ModelProfileConfigSchema).default({}),
+  roles: z.record(RoleConfigSchema).default({}),
+  workflow: z.record(WorkflowConfigSchema).default({}),
   projects: z.record(ProjectConfigSchema),
   notifiers: z.record(NotifierConfigSchema).default({}),
   notificationRouting: z.record(z.array(z.string())).default({
@@ -199,10 +287,9 @@ function applyProjectDefaults(config: OrchestratorConfig): OrchestratorConfig {
       project.name = id;
     }
 
-    // Derive session prefix from project path basename if not set
+    // Derive session prefix from canonical project key if not set
     if (!project.sessionPrefix) {
-      const projectId = basename(project.path);
-      project.sessionPrefix = generateSessionPrefix(projectId);
+      project.sessionPrefix = generateSessionPrefix(id);
     }
 
     const inferredPlugin = inferScmPlugin(project);
@@ -223,38 +310,12 @@ function applyProjectDefaults(config: OrchestratorConfig): OrchestratorConfig {
 
 /** Validate project uniqueness and session prefix collisions */
 function validateProjectUniqueness(config: OrchestratorConfig): void {
-  // Check for duplicate project IDs (basenames)
-  const projectIds = new Set<string>();
-  const projectIdToPaths: Record<string, string[]> = {};
-
-  for (const [_configKey, project] of Object.entries(config.projects)) {
-    const projectId = basename(project.path);
-
-    if (!projectIdToPaths[projectId]) {
-      projectIdToPaths[projectId] = [];
-    }
-    projectIdToPaths[projectId].push(project.path);
-
-    if (projectIds.has(projectId)) {
-      const paths = projectIdToPaths[projectId].join(", ");
-      throw new Error(
-        `Duplicate project ID detected: "${projectId}"\n` +
-          `Multiple projects have the same directory basename:\n` +
-          `  ${paths}\n\n` +
-          `To fix this, ensure each project path has a unique directory name.\n` +
-          `Alternatively, you can use the config key as a unique identifier.`,
-      );
-    }
-    projectIds.add(projectId);
-  }
-
   // Check for duplicate session prefixes
   const prefixes = new Set<string>();
   const prefixToProject: Record<string, string> = {};
 
   for (const [configKey, project] of Object.entries(config.projects)) {
-    const projectId = basename(project.path);
-    const prefix = project.sessionPrefix || generateSessionPrefix(projectId);
+    const prefix = project.sessionPrefix || generateSessionPrefix(configKey);
 
     if (prefixes.has(prefix)) {
       const firstProjectKey = prefixToProject[prefix];
@@ -275,6 +336,121 @@ function validateProjectUniqueness(config: OrchestratorConfig): void {
 
     prefixes.add(prefix);
     prefixToProject[prefix] = configKey;
+  }
+}
+
+function formatConfigValidationError(configPath: string, details: string[]): Error {
+  const header = `Config validation failed at ${configPath}`;
+  if (details.length === 0) {
+    return new Error(header);
+  }
+  return new Error(`${header}:\n${details.map((d) => `- ${d}`).join("\n")}`);
+}
+
+function validateSchemaReferences(config: OrchestratorConfig, configPath: string): void {
+  const providers = new Set(Object.keys(config.providers ?? {}));
+  const authProfiles = new Set(Object.keys(config.authProfiles ?? {}));
+  const modelProfiles = new Set(Object.keys(config.modelProfiles ?? {}));
+  const roles = new Set(Object.keys(config.roles ?? {}));
+  const workflows = new Set(Object.keys(config.workflow ?? {}));
+
+  const errors: string[] = [];
+
+  for (const [authProfileKey, authProfile] of Object.entries(config.authProfiles ?? {})) {
+    if (authProfile.provider && !providers.has(authProfile.provider)) {
+      errors.push(
+        `authProfiles.${authProfileKey}.provider references unknown provider "${authProfile.provider}"`,
+      );
+    }
+
+    const inlineSecretPaths = hasInlineSecretValues(authProfile as Record<string, unknown>);
+    if (inlineSecretPaths.length > 0) {
+      errors.push(
+        `authProfiles.${authProfileKey} includes inline secret values at ${inlineSecretPaths.join(", ")}; use credentialRef/credentialEnvVar references`,
+      );
+    }
+  }
+
+  for (const [modelProfileKey, modelProfile] of Object.entries(config.modelProfiles ?? {})) {
+    if (modelProfile.provider && !providers.has(modelProfile.provider)) {
+      errors.push(
+        `modelProfiles.${modelProfileKey}.provider references unknown provider "${modelProfile.provider}"`,
+      );
+    }
+
+    if (modelProfile.authProfile && !authProfiles.has(modelProfile.authProfile)) {
+      errors.push(
+        `modelProfiles.${modelProfileKey}.authProfile references unknown authProfile "${modelProfile.authProfile}"`,
+      );
+    }
+  }
+
+  for (const [roleKey, role] of Object.entries(config.roles ?? {})) {
+    if (role.provider && !providers.has(role.provider)) {
+      errors.push(`roles.${roleKey}.provider references unknown provider "${role.provider}"`);
+    }
+
+    if (role.authProfile && !authProfiles.has(role.authProfile)) {
+      errors.push(
+        `roles.${roleKey}.authProfile references unknown authProfile "${role.authProfile}"`,
+      );
+    }
+
+    if (!modelProfiles.has(role.modelProfile)) {
+      errors.push(
+        `roles.${roleKey}.modelProfile references unknown modelProfile "${role.modelProfile}"`,
+      );
+    }
+  }
+
+  for (const [workflowKey, workflow] of Object.entries(config.workflow ?? {})) {
+    const roleRefs: Array<[field: string, roleName: string]> = [
+      ["parentIssueRole", workflow.parentIssueRole],
+      ["childIssueRole", workflow.childIssueRole],
+      ["reviewRole", workflow.reviewRole],
+      ["ciFixRole", workflow.ciFixRole],
+    ];
+
+    for (const [field, roleName] of roleRefs) {
+      if (!roles.has(roleName)) {
+        errors.push(`workflow.${workflowKey}.${field} references unknown role "${roleName}"`);
+      }
+    }
+  }
+
+  for (const [projectKey, project] of Object.entries(config.projects)) {
+    if (!project.workflow) continue;
+
+    if (!workflows.has(project.workflow)) {
+      errors.push(
+        `projects.${projectKey}.workflow references unknown workflow "${project.workflow}"`,
+      );
+      continue;
+    }
+
+    const workflow = config.workflow?.[project.workflow];
+    if (!workflow) continue;
+
+    const roleRefs: Array<[field: string, roleName: string]> = [
+      ["parentIssueRole", workflow.parentIssueRole],
+      ["childIssueRole", workflow.childIssueRole],
+      ["reviewRole", workflow.reviewRole],
+      ["ciFixRole", workflow.ciFixRole],
+    ];
+
+    for (const [field, roleName] of roleRefs) {
+      if (!roles.has(roleName)) {
+        errors.push(
+          `projects.${projectKey}.workflow (${project.workflow}) has ${field} with unknown role "${roleName}"`,
+        );
+      }
+    }
+  }
+
+  errors.push(...validateProviderCompatibility(config));
+
+  if (errors.length > 0) {
+    throw formatConfigValidationError(configPath, errors);
   }
 }
 
@@ -444,7 +620,7 @@ export function loadConfig(configPath?: string): OrchestratorConfig {
 
   const raw = readFileSync(path, "utf-8");
   const parsed = parseYaml(raw);
-  const config = validateConfig(parsed);
+  const config = validateConfig(parsed, path);
 
   // Set the config path in the config object for hash generation
   config.configPath = path;
@@ -465,7 +641,7 @@ export function loadConfigWithPath(configPath?: string): {
 
   const raw = readFileSync(path, "utf-8");
   const parsed = parseYaml(raw);
-  const config = validateConfig(parsed);
+  const config = validateConfig(parsed, path);
 
   // Set the config path in the config object for hash generation
   config.configPath = path;
@@ -474,23 +650,51 @@ export function loadConfigWithPath(configPath?: string): {
 }
 
 /** Validate a raw config object */
-export function validateConfig(raw: unknown): OrchestratorConfig {
-  const validated = OrchestratorConfigSchema.parse(raw);
+export function validateConfig(raw: unknown, configPath = "<inline config>"): OrchestratorConfig {
+  let validated: OrchestratorConfig;
+  try {
+    validated = OrchestratorConfigSchema.parse(raw) as OrchestratorConfig;
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const details = err.issues.map((issue) => {
+        const pathLabel = issue.path.length > 0 ? issue.path.join(".") : "<root>";
+        return `${pathLabel}: ${issue.message}`;
+      });
+      throw formatConfigValidationError(configPath, details);
+    }
+    throw err;
+  }
 
   let config = validated as OrchestratorConfig;
   config = expandPaths(config);
   config = applyProjectDefaults(config);
   config = applyDefaultReactions(config);
 
-  // Validate project uniqueness and prefix collisions
-  validateProjectUniqueness(config);
+  try {
+    // Validate project uniqueness and prefix collisions
+    validateProjectUniqueness(config);
+
+    // Validate cross-reference integrity for new schema blocks
+    validateSchemaReferences(config, configPath);
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.message.startsWith("Config validation failed at ")) {
+        throw err;
+      }
+      throw formatConfigValidationError(configPath, [err.message]);
+    }
+    throw err;
+  }
 
   return config;
 }
 
 /** Get the default config (useful for `ao init`) */
 export function getDefaultConfig(): OrchestratorConfig {
-  return validateConfig({
-    projects: {},
-  });
+  return validateConfig(
+    {
+      projects: {},
+    },
+    "<default config>",
+  );
 }

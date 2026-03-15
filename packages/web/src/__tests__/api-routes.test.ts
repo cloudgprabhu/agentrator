@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import {
   SessionNotFoundError,
@@ -8,7 +10,9 @@ import {
   type OrchestratorConfig,
   type PluginRegistry,
   type SCM,
+  type Tracker,
 } from "@composio/ao-core";
+import { taskLineageToYaml } from "../../../core/src/task-lineage.js";
 import * as serialize from "@/lib/serialize";
 import { getSCM } from "@/lib/services";
 
@@ -102,17 +106,17 @@ const mockSessionManager: SessionManager = {
 
 const mockSCM: SCM = {
   name: "github",
-  verifyWebhook: vi.fn(async () => ({
+  verifyWebhook: vi.fn(async (request) => ({
     ok: true,
     eventType: "pull_request",
-    deliveryId: "delivery-1",
+    deliveryId: request.headers["x-github-delivery"] ?? "delivery-1",
   })),
-  parseWebhook: vi.fn(async () => ({
+  parseWebhook: vi.fn(async (request) => ({
     provider: "github",
     kind: "pull_request" as const,
     action: "opened",
     rawEventType: "pull_request",
-    deliveryId: "delivery-1",
+    deliveryId: request.headers["x-github-delivery"] ?? "delivery-1",
     repository: { owner: "acme", name: "my-app" },
     prNumber: 432,
     branch: "feat/health-check",
@@ -137,9 +141,26 @@ const mockSCM: SCM = {
   })),
 };
 
+const mockTracker: Tracker = {
+  name: "github",
+  getIssue: vi.fn(async (identifier: string) => ({
+    id: identifier,
+    title: `Issue ${identifier}`,
+    description: "",
+    url: `https://github.com/acme/my-app/issues/${identifier}`,
+    state: "open",
+    labels: [],
+  })),
+  isCompleted: vi.fn(async () => false),
+  issueUrl: vi.fn((identifier: string) => `https://github.com/acme/my-app/issues/${identifier}`),
+  issueLabel: vi.fn((url: string) => `#${url.split("/").pop() ?? "unknown"}`),
+  branchName: vi.fn((identifier: string) => `feat/${identifier}`),
+  generatePrompt: vi.fn(async (identifier: string) => `Work on ${identifier}`),
+};
+
 const mockRegistry: PluginRegistry = {
   register: vi.fn(),
-  get: vi.fn(() => mockSCM) as PluginRegistry["get"],
+  get: vi.fn((slot: string) => (slot === "tracker" ? mockTracker : mockSCM)) as PluginRegistry["get"],
   list: vi.fn(() => []),
   loadBuiltins: vi.fn(async () => {}),
   loadFromConfig: vi.fn(async () => {}),
@@ -162,7 +183,17 @@ const mockConfig: OrchestratorConfig = {
       path: "/tmp/my-app",
       defaultBranch: "main",
       sessionPrefix: "my-app",
+      workflow: "default",
+      tracker: { plugin: "github" },
       scm: { plugin: "github", webhook: {} },
+    },
+  },
+  workflow: {
+    default: {
+      parentIssueRole: "planner",
+      childIssueRole: "implementer",
+      reviewRole: "reviewer",
+      ciFixRole: "fixer",
     },
   },
   notifiers: {},
@@ -190,6 +221,7 @@ vi.mock("@/lib/project-name", () => ({
 // ── Import routes after mocking ───────────────────────────────────────
 
 import { GET as sessionsGET } from "@/app/api/sessions/route";
+import { GET as sessionGET } from "@/app/api/sessions/[id]/route";
 import { GET as projectsGET } from "@/app/api/projects/route";
 import { POST as spawnPOST } from "@/app/api/spawn/route";
 import { POST as sendPOST } from "@/app/api/sessions/[id]/send/route";
@@ -200,6 +232,7 @@ import { POST as remapPOST } from "@/app/api/sessions/[id]/remap/route";
 import { POST as mergePOST } from "@/app/api/prs/[id]/merge/route";
 import { GET as eventsGET } from "@/app/api/events/route";
 import { POST as webhookPOST } from "@/app/api/webhooks/[...slug]/route";
+import { GET as lineageGET } from "@/app/api/lineage/route";
 
 function makeRequest(url: string, init?: RequestInit): NextRequest {
   return new NextRequest(
@@ -220,17 +253,28 @@ beforeEach(() => {
     eventType: "pull_request",
     deliveryId: "delivery-1",
   });
-  (mockSCM.parseWebhook as ReturnType<typeof vi.fn>).mockResolvedValue({
+  (mockSCM.verifyWebhook as ReturnType<typeof vi.fn>).mockImplementation(async (request) => ({
+    ok: true,
+    eventType: "pull_request",
+    deliveryId: request.headers["x-github-delivery"] ?? "delivery-1",
+  }));
+  (mockSCM.parseWebhook as ReturnType<typeof vi.fn>).mockImplementation(async (request) => ({
     provider: "github",
     kind: "pull_request",
     action: "opened",
     rawEventType: "pull_request",
-    deliveryId: "delivery-1",
+    deliveryId: request.headers["x-github-delivery"] ?? "delivery-1",
     repository: { owner: "acme", name: "my-app" },
     prNumber: 432,
     branch: "feat/health-check",
     data: {},
-  });
+  }));
+  (mockTracker.isCompleted as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+});
+
+afterEach(() => {
+  rmSync(join("/tmp/my-app", "docs"), { recursive: true, force: true });
+  rmSync(join("/tmp/my-app", ".ao"), { recursive: true, force: true });
 });
 
 describe("API Routes", () => {
@@ -268,6 +312,94 @@ describe("API Routes", () => {
       expect(session).toHaveProperty("createdAt");
     });
 
+    it("returns runtime identity and workflow lineage fields when available", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          updatedAt: "2026-03-14T09:30:00.000Z",
+          planningSession: {
+            sessionId: "planner-1",
+            role: "planner",
+            branch: "feat/int-42-plan",
+            worktreePath: "/tmp/worktrees/planner-1",
+            createdAt: "2026-03-14T09:00:00.000Z",
+          },
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Build workflow view",
+              issueId: "INT-1270",
+              issueUrl: "https://github.com/acme/my-app/issues/1270",
+              issueLabel: "#1270",
+              labels: ["workflow"],
+              dependencies: [],
+              state: "waiting_review",
+              implementationSessions: [
+                {
+                  sessionId: "frontend-1",
+                  role: "implementer",
+                  branch: "feat/INT-1270-table",
+                  worktreePath: "/tmp/worktrees/frontend-1",
+                  createdAt: "2026-03-14T09:10:00.000Z",
+                },
+              ],
+              reviewSessions: [],
+              pr: {
+                number: 432,
+                url: "https://github.com/acme/my-app/pull/432",
+                branch: "feat/INT-1270-table",
+                state: "open",
+                updatedAt: "2026-03-14T09:20:00.000Z",
+              },
+            },
+          ],
+        }),
+      );
+
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        makeSession({
+          id: "frontend-1",
+          projectId: "my-app",
+          issueId: "INT-1270",
+          branch: "feat/INT-1270-table",
+          status: "working",
+          activity: "idle",
+          metadata: {
+            role: "implementer",
+            agent: "codex",
+            provider: "openai",
+            model: "gpt-5",
+            authProfile: "chatgpt-pro",
+            authMode: "browser-account",
+          },
+        }),
+      ]);
+
+      const res = await sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+      const data = await res.json();
+
+      expect(data.sessions[0].runtime).toEqual({
+        role: "implementer",
+        agent: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        authProfile: "chatgpt-pro",
+        authMode: "browser-account",
+        promptPolicy: null,
+      });
+      expect(data.sessions[0].workflow.relationship).toBe("child");
+      expect(data.sessions[0].workflow.parent.issueId).toBe("INT-42");
+      expect(data.sessions[0].workflow.children[0].state).toBe("waiting_review");
+      expect(data.sessions[0].workflow.linkage.prNumber).toBe(432);
+    });
+
     it("skips PR enrichment when metadata enrichment hits timeout", async () => {
       vi.useFakeTimers();
 
@@ -284,6 +416,104 @@ describe("API Routes", () => {
 
       metadataSpy.mockRestore();
       vi.useRealTimers();
+    });
+  });
+
+  describe("GET /api/sessions/:id", () => {
+    it("returns basic session detail for legacy sessions without workflow metadata", async () => {
+      const res = await sessionGET(makeRequest("http://localhost:3000/api/sessions/backend-3"), {
+        params: Promise.resolve({ id: "backend-3" }),
+      });
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.id).toBe("backend-3");
+      expect(data.projectId).toBe("my-app");
+      expect(data.runtime).toEqual({
+        role: null,
+        agent: "claude-code",
+        provider: null,
+        model: null,
+        authProfile: null,
+        authMode: null,
+        promptPolicy: null,
+      });
+      expect(data.workflow).toBeNull();
+    });
+
+    it("falls back to basic session detail when metadata enrichment stalls", async () => {
+      vi.useFakeTimers();
+
+      const metadataSpy = vi
+        .spyOn(serialize, "enrichSessionsMetadata")
+        .mockImplementation(() => new Promise<void>(() => {}));
+
+      const responsePromise = sessionGET(
+        makeRequest("http://localhost:3000/api/sessions/backend-3"),
+        { params: Promise.resolve({ id: "backend-3" }) },
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+      const res = await responsePromise;
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.id).toBe("backend-3");
+      expect(getSCM).not.toHaveBeenCalled();
+
+      metadataSpy.mockRestore();
+      vi.useRealTimers();
+    });
+  });
+
+  describe("GET /api/lineage", () => {
+    it("returns workflow lineage for a parent issue", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          updatedAt: "2026-03-14T09:10:00.000Z",
+          planningSession: {
+            sessionId: "planner-1",
+            role: "planner",
+            branch: "feat/int-42-plan",
+            worktreePath: "/tmp/worktrees/planner-1",
+            createdAt: "2026-03-14T09:00:00.000Z",
+          },
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Define schema",
+              issueId: "101",
+              issueUrl: "https://github.com/acme/my-app/issues/101",
+              issueLabel: "#101",
+              labels: ["workflow"],
+              dependencies: [],
+              state: "waiting_review",
+              implementationSessions: [],
+              reviewSessions: [],
+              pr: null,
+            },
+          ],
+        }),
+      );
+
+      const res = await lineageGET(
+        makeRequest("http://localhost:3000/api/lineage?project=my-app&parentIssue=INT-42"),
+      );
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.lineage.parentIssue).toBe("INT-42");
+      expect(data.lineage.planningSession.sessionId).toBe("planner-1");
+      expect(data.lineage.childIssues[0].issueId).toBe("101");
+      expect(data.lineage.childIssues[0].state).toBe("waiting_review");
+      expect(data.stateSummary.waiting_review).toBe(1);
     });
   });
 
@@ -622,6 +852,8 @@ describe("API Routes", () => {
       expect(event.sessions.length).toBeGreaterThan(0);
       expect(event.sessions[0]).toHaveProperty("id");
       expect(event.sessions[0]).toHaveProperty("attentionLevel");
+      expect(event.sessions[0]).toHaveProperty("runtimeVersion");
+      expect(event.sessions[0]).toHaveProperty("workflowVersion");
     });
 
     it("excludes orchestrator sessions from snapshot", async () => {
@@ -707,6 +939,82 @@ describe("API Routes", () => {
       expect(sessionIds).toContain("other-app-1");
       // But exclude orchestrator
       expect(sessionIds).not.toContain("my-app-orchestrator");
+    });
+
+    it("includes runtime and workflow signatures for enriched refresh decisions", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          updatedAt: "2026-03-14T10:00:00.000Z",
+          planningSession: null,
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Implement SSE refresh metadata",
+              issueId: "INT-42-1",
+              issueUrl: "https://github.com/acme/my-app/issues/INT-42-1",
+              issueLabel: "#INT-42-1",
+              labels: [],
+              dependencies: [],
+              state: "waiting_review",
+              implementationSessions: [],
+              reviewSessions: [
+                {
+                  sessionId: "review-1",
+                  role: "reviewer",
+                  branch: "feat/review",
+                  worktreePath: "/tmp/wt",
+                  createdAt: "2026-03-14T10:00:00.000Z",
+                },
+              ],
+              pr: {
+                url: "https://github.com/acme/my-app/pull/42",
+                number: 42,
+                branch: "feat/review",
+                state: "open",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+            },
+          ],
+        }),
+      );
+
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        makeSession({
+          id: "review-1",
+          projectId: "my-app",
+          issueId: "INT-42-1",
+          metadata: {
+            role: "reviewer",
+            agent: "codex",
+            provider: "openai",
+            model: "gpt-5",
+            authProfile: "openai-browser",
+            authMode: "browser-account",
+            promptRulesFiles: '[".ao/reviewer-rules.md"]',
+            promptPrefix: "Review carefully",
+            promptGuardrails: '["Flag migration risk"]',
+          },
+        }),
+      ]);
+
+      const res = await eventsGET(makeRequest("http://localhost:3000/api/events"));
+      const reader = res.body!.getReader();
+      const { value } = await reader.read();
+      reader.cancel();
+      const event = JSON.parse(new TextDecoder().decode(value).replace("data: ", "").trim());
+
+      expect(event.sessions[0]?.runtimeVersion).toContain("reviewer");
+      expect(event.sessions[0]?.runtimeVersion).toContain(".ao/reviewer-rules.md");
+      expect(event.sessions[0]?.workflowVersion).toContain("waiting_review");
+      expect(event.sessions[0]?.workflowVersion).toContain("INT-42");
     });
   });
 
@@ -902,6 +1210,329 @@ describe("API Routes", () => {
       expect(mockLifecycleManager.check).toHaveBeenCalledWith("backend-7");
       const data = await res.json();
       expect(data.sessionIds).toEqual(["backend-7"]);
+    });
+
+    it("auto-spawns a reviewer session for PR opened events when lineage matches", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.task-plan.yaml"),
+        [
+          "version: 1",
+          "parentIssue: INT-42",
+          "specPath: docs/specs/planning.md",
+          "adrPath: null",
+          "childTasks:",
+          "  - title: Review schema",
+          "    summary: Review the implementation against the plan.",
+          "    acceptanceCriteria:",
+          "      - Validation succeeds for well-formed plans",
+          "    dependencies: []",
+          "    suggestedFiles:",
+          "      - packages/core/src/task-plan.ts",
+          "    labels:",
+          "      - workflow",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          planningSession: null,
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Review schema",
+              issueId: "101",
+              issueUrl: "https://github.com/acme/my-app/issues/101",
+              issueLabel: "#101",
+              labels: ["workflow"],
+              dependencies: [],
+              state: "pr_opened",
+              implementationSessions: [
+                {
+                  sessionId: "backend-7",
+                  role: "implementer",
+                  branch: "feat/health-check",
+                  worktreePath: "/tmp/worktrees/backend-7",
+                  createdAt: "2026-03-14T09:05:00.000Z",
+                },
+              ],
+              reviewSessions: [],
+              pr: {
+                number: 432,
+                url: "https://github.com/acme/my-app/pull/432",
+                branch: "feat/health-check",
+                state: "open",
+                updatedAt: "2026-03-14T09:10:00.000Z",
+              },
+            },
+          ],
+        }),
+      );
+
+      (mockSessionManager.spawn as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        makeSession({
+          id: "reviewer-1",
+          projectId: "my-app",
+          issueId: "101",
+          status: "spawning",
+          branch: "feat/health-check",
+          workspacePath: "/tmp/worktrees/reviewer-1",
+          metadata: { role: "reviewer" },
+        }),
+      );
+
+      const req = makeRequest("/api/webhooks/github", {
+        method: "POST",
+        body: JSON.stringify({ any: "payload" }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-auto-review-1",
+        },
+      });
+
+      const res = await webhookPOST(req);
+      expect(res.status).toBe(202);
+      expect(mockSessionManager.spawn).toHaveBeenCalledWith({
+        projectId: "my-app",
+        issueId: "101",
+        role: "reviewer",
+        prompt: expect.stringContaining("## Workflow Review Handoff"),
+      });
+      const spawnCall = (mockSessionManager.spawn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(spawnCall?.prompt).toContain("Parent issue: INT-42");
+      expect(spawnCall?.prompt).toContain("Child issue: #101 (101)");
+      expect(spawnCall?.prompt).toContain("https://github.com/acme/my-app/pull/432");
+
+      const data = await res.json();
+      expect(data.reviewSessionIds).toEqual(["reviewer-1"]);
+      expect(data.sessionIds).toEqual(["backend-7"]);
+    });
+
+    it("avoids duplicate reviewer handoff storms for repeated PR deliveries", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.task-plan.yaml"),
+        [
+          "version: 1",
+          "parentIssue: INT-42",
+          "specPath: null",
+          "adrPath: null",
+          "childTasks:",
+          "  - title: Review schema",
+          "    summary: Review the implementation against the plan.",
+          "    acceptanceCriteria:",
+          "      - Validation succeeds for well-formed plans",
+          "    dependencies: []",
+          "    suggestedFiles: []",
+          "    labels: []",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          planningSession: null,
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Review schema",
+              issueId: "101",
+              issueUrl: "https://github.com/acme/my-app/issues/101",
+              issueLabel: "#101",
+              labels: [],
+              dependencies: [],
+              state: "pr_opened",
+              implementationSessions: [
+                {
+                  sessionId: "backend-7",
+                  role: "implementer",
+                  branch: "feat/health-check",
+                  worktreePath: "/tmp/worktrees/backend-7",
+                  createdAt: "2026-03-14T09:05:00.000Z",
+                },
+              ],
+              reviewSessions: [],
+              pr: {
+                number: 432,
+                url: "https://github.com/acme/my-app/pull/432",
+                branch: "feat/health-check",
+                state: "open",
+                updatedAt: "2026-03-14T09:10:00.000Z",
+              },
+            },
+          ],
+        }),
+      );
+
+      (mockSessionManager.spawn as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeSession({
+          id: "reviewer-1",
+          projectId: "my-app",
+          issueId: "101",
+          status: "spawning",
+          branch: "feat/health-check",
+          workspacePath: "/tmp/worktrees/reviewer-1",
+          metadata: { role: "reviewer" },
+        }),
+      );
+
+      const first = await webhookPOST(
+        makeRequest("/api/webhooks/github", {
+          method: "POST",
+          body: JSON.stringify({ any: "payload" }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "delivery-auto-review-repeat",
+          },
+        }),
+      );
+      expect(first.status).toBe(202);
+      const second = await webhookPOST(
+        makeRequest("/api/webhooks/github", {
+          method: "POST",
+          body: JSON.stringify({ any: "payload" }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "delivery-auto-review-repeat",
+          },
+        }),
+      );
+      expect(second.status).toBe(202);
+      expect(mockSessionManager.spawn).toHaveBeenCalledTimes(1);
+      const secondData = await second.json();
+      expect(secondData.reviewSkips).toContain("my-app:INT-42:101:duplicate_delivery");
+    });
+
+    it("deduplicates the same PR update burst even when delivery ids differ", async () => {
+      mkdirSync(join("/tmp/my-app", "docs", "plans"), { recursive: true });
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.task-plan.yaml"),
+        [
+          "version: 1",
+          "parentIssue: INT-42",
+          "specPath: null",
+          "adrPath: null",
+          "childTasks:",
+          "  - title: Review schema",
+          "    summary: Review the implementation against the plan.",
+          "    acceptanceCriteria:",
+          "      - Validation succeeds for well-formed plans",
+          "    dependencies: []",
+          "    suggestedFiles: []",
+          "    labels: []",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join("/tmp/my-app", "docs", "plans", "int-42.lineage.yaml"),
+        taskLineageToYaml({
+          version: 1,
+          projectId: "my-app",
+          parentIssue: "INT-42",
+          taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+          trackerPlugin: "github",
+          createdAt: "2026-03-14T09:00:00.000Z",
+          planningSession: null,
+          childIssues: [
+            {
+              taskIndex: 0,
+              title: "Review schema",
+              issueId: "101",
+              issueUrl: "https://github.com/acme/my-app/issues/101",
+              issueLabel: "#101",
+              labels: [],
+              dependencies: [],
+              state: "pr_opened",
+              implementationSessions: [
+                {
+                  sessionId: "backend-7",
+                  role: "implementer",
+                  branch: "feat/health-check",
+                  worktreePath: "/tmp/worktrees/backend-7",
+                  createdAt: "2026-03-14T09:05:00.000Z",
+                },
+              ],
+              reviewSessions: [],
+              pr: {
+                number: 432,
+                url: "https://github.com/acme/my-app/pull/432",
+                branch: "feat/health-check",
+                state: "open",
+                updatedAt: "2026-03-14T09:10:00.000Z",
+              },
+            },
+          ],
+        }),
+      );
+
+      (mockSCM.parseWebhook as ReturnType<typeof vi.fn>).mockImplementation(async (request) => ({
+        provider: "github",
+        kind: "pull_request",
+        action: "synchronize",
+        rawEventType: "pull_request",
+        deliveryId: request.headers["x-github-delivery"] ?? "delivery-1",
+        repository: { owner: "acme", name: "my-app" },
+        prNumber: 432,
+        branch: "feat/health-check",
+        sha: "abc123",
+        data: {},
+      }));
+      (mockSessionManager.spawn as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeSession({
+          id: "reviewer-1",
+          projectId: "my-app",
+          issueId: "101",
+          status: "spawning",
+          branch: "feat/health-check",
+          workspacePath: "/tmp/worktrees/reviewer-1",
+          metadata: { role: "reviewer" },
+        }),
+      );
+
+      const first = await webhookPOST(
+        makeRequest("/api/webhooks/github", {
+          method: "POST",
+          body: JSON.stringify({ any: "payload" }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "delivery-auto-review-sha-1",
+          },
+        }),
+      );
+      expect(first.status).toBe(202);
+
+      const second = await webhookPOST(
+        makeRequest("/api/webhooks/github", {
+          method: "POST",
+          body: JSON.stringify({ any: "payload" }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "delivery-auto-review-sha-2",
+          },
+        }),
+      );
+      expect(second.status).toBe(202);
+      expect(mockSessionManager.spawn).toHaveBeenCalledTimes(1);
+      const secondData = await second.json();
+      expect(secondData.reviewSkips).toContain("my-app:INT-42:101:duplicate_delivery");
     });
 
     it("returns 401 when webhook verification fails", async () => {

@@ -1,0 +1,44 @@
+version: 1
+parentIssue: INT-42
+specPath: docs/specs/project-based-dashboard-architecture.md
+adrPath: null
+childTasks:
+  - title: Define the task-plan schema in core
+    summary: Add the shared YAML schema, types, and parsing helpers for planner output.
+    acceptanceCriteria:
+      - A schema validates parentIssue, specPath, adrPath, and childTasks
+      - Invalid task-plan files fail with path-specific validation errors
+    dependencies: []
+    suggestedFiles:
+      - packages/core/src/task-plan.ts
+      - packages/core/src/__tests__/task-plan.test.ts
+    labels:
+      - workflow
+      - backend
+  - title: Add CLI task-plan validation
+    summary: Expose a command that validates task-plan files from disk.
+    acceptanceCriteria:
+      - ao workflow validate-plan exits successfully for valid YAML
+      - Invalid task-plan files exit non-zero with a clear error
+    dependencies:
+      - Define the task-plan schema in core
+    suggestedFiles:
+      - packages/cli/src/commands/workflow.ts
+      - packages/cli/__tests__/commands/workflow.test.ts
+    labels:
+      - workflow
+      - cli
+  - title: Document the planner artifact format
+    summary: Update workflow-planning docs and the top-level README to describe the YAML artifact and validation flow.
+    acceptanceCriteria:
+      - Docs show the canonical schema and validation command
+      - A sample task-plan file is linked from the docs
+    dependencies:
+      - Add CLI task-plan validation
+    suggestedFiles:
+      - docs/task-plan-format.md
+      - docs/workflow-planning.md
+      - README.md
+    labels:
+      - docs
+      - workflow

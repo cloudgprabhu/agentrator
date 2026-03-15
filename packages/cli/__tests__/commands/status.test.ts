@@ -14,7 +14,7 @@ import {
   type Session,
   type SessionManager,
   type ActivityState,
-  getSessionsDir,
+  taskLineageToYaml,
 } from "@composio/ao-core";
 
 const {
@@ -176,6 +176,8 @@ beforeEach(() => {
 
   const configPath = join(tmpDir, "agent-orchestrator.yaml");
   writeFileSync(configPath, "projects: {}");
+  const projectPath = join(tmpDir, "main-repo");
+  mkdirSync(projectPath, { recursive: true });
 
   mockConfigRef.current = {
     configPath,
@@ -191,7 +193,7 @@ beforeEach(() => {
       "my-app": {
         name: "My App",
         repo: "org/my-app",
-        path: join(tmpDir, "main-repo"),
+        path: projectPath,
         defaultBranch: "main",
         sessionPrefix: "app",
         scm: { plugin: "github" },
@@ -202,8 +204,7 @@ beforeEach(() => {
     reactions: {},
   } as Record<string, unknown>;
 
-  // Calculate and create sessions directory for hash-based architecture
-  sessionsDir = getSessionsDir(configPath, join(tmpDir, "main-repo"));
+  sessionsDir = join(tmpDir, ".ao-status-sessions");
   mkdirSync(sessionsDir, { recursive: true });
   sessionsDirRef.current = sessionsDir;
 
@@ -248,6 +249,85 @@ afterEach(() => {
 });
 
 describe("status command", () => {
+  it("resolves status by canonical logical project ID when two projects share one repo path", async () => {
+    mockConfigRef.current = {
+      configPath: join(tmpDir, "agent-orchestrator.yaml"),
+      port: 3000,
+      readyThresholdMs: 300_000,
+      defaults: {
+        runtime: "tmux",
+        agent: "claude-code",
+        workspace: "worktree",
+        notifiers: ["desktop"],
+      },
+      projects: {
+        planner: {
+          name: "Planner",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "pla",
+          scm: { plugin: "github" },
+        },
+        implementer: {
+          name: "Implementer",
+          repo: "org/shared-app",
+          path: join(tmpDir, "main-repo"),
+          defaultBranch: "main",
+          sessionPrefix: "imp",
+          scm: { plugin: "github" },
+        },
+      },
+      notifiers: {},
+      notificationRouting: {},
+      reactions: {},
+    } as Record<string, unknown>;
+
+    mockSessionManager.list.mockImplementation(async (projectId?: string) => {
+      const all: Session[] = [
+        {
+          id: "pla-1",
+          projectId: "planner",
+          status: "working",
+          activity: "active",
+          branch: "feat/PLAN-1",
+          issueId: "PLAN-1",
+          pr: null,
+          workspacePath: "/tmp/wt/pla-1",
+          runtimeHandle: { id: "pla-1", runtimeName: "tmux", data: {} },
+          agentInfo: null,
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+          metadata: {},
+        },
+        {
+          id: "imp-1",
+          projectId: "implementer",
+          status: "working",
+          activity: "active",
+          branch: "feat/IMP-1",
+          issueId: "IMP-1",
+          pr: null,
+          workspacePath: "/tmp/wt/imp-1",
+          runtimeHandle: { id: "imp-1", runtimeName: "tmux", data: {} },
+          agentInfo: null,
+          createdAt: new Date(),
+          lastActivityAt: new Date(),
+          metadata: {},
+        },
+      ];
+      return projectId ? all.filter((s) => s.projectId === projectId) : all;
+    });
+
+    await program.parseAsync(["node", "test", "status", "--project", "planner"]);
+
+    expect(mockSessionManager.list).toHaveBeenCalledWith("planner");
+    const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain("Planner");
+    expect(output).toContain("pla-1");
+    expect(output).not.toContain("imp-1");
+  });
+
   it("shows banner and project header", async () => {
     mockTmux.mockResolvedValue(null);
 
@@ -486,7 +566,51 @@ describe("status command", () => {
   it("outputs JSON with enriched fields", async () => {
     writeFileSync(
       join(sessionsDir, "app-1"),
-      "worktree=/tmp/wt\nbranch=feat/json\nstatus=working\n",
+      [
+        "worktree=/tmp/wt",
+        "branch=feat/json",
+        "status=working",
+        "role=implementer",
+        "agent=codex",
+        "provider=openai",
+        "model=gpt-5-codex",
+        "authProfile=openai-browser",
+        "authMode=browser-account",
+        'promptRulesFiles=[".ao/model-rules.md",".ao/role-rules.md"]',
+        "promptPrefix=Role prompt prefix",
+        'promptGuardrails=["Never force push","Always run tests"]',
+        "issue=INT-42-1",
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(tmpDir, "main-repo", "docs", "plans"), { recursive: true });
+    writeFileSync(
+      join(tmpDir, "main-repo", "docs", "plans", "int-42.lineage.yaml"),
+      taskLineageToYaml({
+        version: 1,
+        projectId: "my-app",
+        parentIssue: "INT-42",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        trackerPlugin: "github",
+        createdAt: "2026-03-14T09:00:00.000Z",
+        updatedAt: "2026-03-14T10:00:00.000Z",
+        planningSession: null,
+        childIssues: [
+          {
+            taskIndex: 0,
+            title: "Implement status metadata",
+            issueId: "INT-42-1",
+            issueUrl: "https://tracker.test/issues/INT-42-1",
+            issueLabel: "#INT-42-1",
+            labels: ["cli"],
+            dependencies: [],
+            state: "waiting_review",
+            implementationSessions: [],
+            reviewSessions: [],
+            pr: null,
+          },
+        ],
+      }),
     );
 
     mockTmux.mockImplementation(async (...args: string[]) => {
@@ -519,6 +643,105 @@ describe("status command", () => {
     expect(parsed[0].ciStatus).toBe("passing");
     expect(parsed[0].reviewDecision).toBe("pending");
     expect(parsed[0].pendingThreads).toBe(0);
+    expect(parsed[0].project).toBe("my-app");
+    expect(parsed[0].role).toBe("implementer");
+    expect(parsed[0].agent).toBe("codex");
+    expect(parsed[0].provider).toBe("openai");
+    expect(parsed[0].model).toBe("gpt-5-codex");
+    expect(parsed[0].authProfile).toBe("openai-browser");
+    expect(parsed[0].authMode).toBe("browser-account");
+    expect(parsed[0].promptRulesFiles).toEqual([".ao/model-rules.md", ".ao/role-rules.md"]);
+    expect(parsed[0].promptPrefix).toBe("Role prompt prefix");
+    expect(parsed[0].promptGuardrails).toEqual(["Never force push", "Always run tests"]);
+    expect(parsed[0].issue).toBe("INT-42-1");
+    expect(parsed[0].workflowState).toBe("waiting_review");
+    expect(parsed[0].workflowRelationship).toBe("child of INT-42");
+  });
+
+  it("shows verbose workflow/runtime metadata while preserving the compact table", async () => {
+    writeFileSync(
+      join(sessionsDir, "app-1"),
+      [
+        "worktree=/tmp/wt",
+        "branch=feat/status",
+        "status=working",
+        "issue=INT-42-1",
+        "role=reviewer",
+        "agent=codex",
+        "provider=openai",
+        "model=gpt-5-codex",
+        "authProfile=openai-browser",
+        "authMode=browser-account",
+        'promptRulesFiles=[".ao/reviewer-rules.md"]',
+        "promptPrefix=Review from the user-impact perspective.",
+        'promptGuardrails=["Flag migration risk"]',
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(tmpDir, "main-repo", "docs", "plans"), { recursive: true });
+    writeFileSync(
+      join(tmpDir, "main-repo", "docs", "plans", "int-42.lineage.yaml"),
+      taskLineageToYaml({
+        version: 1,
+        projectId: "my-app",
+        parentIssue: "INT-42",
+        taskPlanPath: "docs/plans/int-42.task-plan.yaml",
+        trackerPlugin: "github",
+        createdAt: "2026-03-14T09:00:00.000Z",
+        updatedAt: "2026-03-14T10:00:00.000Z",
+        planningSession: null,
+        childIssues: [
+          {
+            taskIndex: 0,
+            title: "Implement status metadata",
+            issueId: "INT-42-1",
+            issueUrl: "https://tracker.test/issues/INT-42-1",
+            issueLabel: "#INT-42-1",
+            labels: ["cli"],
+            dependencies: [],
+            state: "waiting_review",
+            implementationSessions: [],
+            reviewSessions: [
+              {
+                sessionId: "app-1",
+                role: "reviewer",
+                branch: "feat/status",
+                worktreePath: "/tmp/wt",
+                createdAt: "2026-03-14T10:00:00.000Z",
+              },
+            ],
+            pr: null,
+          },
+        ],
+      }),
+    );
+
+    mockTmux.mockImplementation(async (...args: string[]) => {
+      if (args[0] === "list-sessions") return "app-1";
+      if (args[0] === "display-message") return String(Math.floor(Date.now() / 1000));
+      return null;
+    });
+    mockGit.mockResolvedValue("feat/status");
+
+    await program.parseAsync(["node", "test", "status", "--verbose"]);
+
+    const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain("Session");
+    expect(output).toContain("Branch");
+    expect(output).toContain("app-1");
+    expect(output).toContain("project=my-app");
+    expect(output).toContain("role=reviewer");
+    expect(output).toContain("agent=codex");
+    expect(output).toContain("provider=openai");
+    expect(output).toContain("model=gpt-5-codex");
+    expect(output).toContain("authProfile=openai-browser");
+    expect(output).toContain("authMode=browser-account");
+    expect(output).toContain("promptRules=.ao/reviewer-rules.md");
+    expect(output).toContain("promptPrefix=Review from the user-impact perspective.");
+    expect(output).toContain("guardrails=Flag migration risk");
+    expect(output).toContain("issueId=INT-42-1");
+    expect(output).toContain("workflow=waiting_review");
+    expect(output).toContain("relation=child of INT-42");
   });
 
   it("falls back to PR number from metadata URL when SCM fails", async () => {

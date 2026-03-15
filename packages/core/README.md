@@ -112,12 +112,124 @@ Loads and validates `agent-orchestrator.yaml`:
 - `terminalPort` — terminal WebSocket port (auto-detected if not set)
 - `directTerminalPort` — direct terminal WebSocket port (auto-detected if not set)
 - `defaults` — default plugins (runtime, agent, workspace, notifiers)
+- `providers` — optional provider catalog (anthropic/openai/bedrock/etc.)
+- `authProfiles` — optional auth profile catalog (browser-account/api-key/aws-profile/console)
+- `modelProfiles` — optional model/profile mapping (agent + authProfile + model + runtime options)
+- `roles` — optional role mapping (planner/implementer/reviewer/fixer -> modelProfile)
+- `workflow` — optional workflow role mapping (parentIssueRole/childIssueRole/reviewRole/ciFixRole)
 - `projects` — per-project config (repo, path, branch, symlinks, reactions, agentRules)
 - `notifiers` — notification channel config (Slack webhooks, etc.)
 - `notificationRouting` — which notifiers get which priority events
 - `reactions` — auto-response config (ci-failed, changes-requested, approved-and-green, etc.)
 
 **Zod schemas** validate all config at load time.
+
+**Project ID behavior:**
+
+- Canonical runtime `projectId` is the config key under `projects:`.
+- Example: `projects: { planner: { ... } }` -> runtime `projectId = "planner"`.
+- `project.name` is display-oriented and optional.
+- Multiple project keys may point to the same `path` without project ID collision.
+
+### New schema reference validation examples
+
+Valid example:
+
+```yaml
+providers:
+  openai:
+    kind: openai
+
+authProfiles:
+  team-api:
+    type: api-key
+    provider: openai
+
+modelProfiles:
+  impl-default:
+    model: o4-mini
+    authProfile: team-api
+
+roles:
+  implementer:
+    modelProfile: impl-default
+
+workflow:
+  default:
+    parentIssueRole: implementer
+    childIssueRole: implementer
+    reviewRole: implementer
+    ciFixRole: implementer
+
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/my-app
+    workflow: default
+```
+
+Invalid example 1 (unknown provider reference):
+
+```yaml
+providers:
+  openai:
+    kind: openai
+authProfiles:
+  bad:
+    type: api-key
+    provider: anthropic # invalid: provider key not defined
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/my-app
+```
+
+Invalid example 2 (unknown authProfile in modelProfile):
+
+```yaml
+modelProfiles:
+  impl:
+    model: o4-mini
+    authProfile: missing-auth # invalid: authProfiles.missing-auth not defined
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/my-app
+```
+
+Invalid example 3 (unknown workflow/role references):
+
+```yaml
+roles:
+  implementer:
+    modelProfile: missing-model # invalid: modelProfiles.missing-model not defined
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/my-app
+```
+
+Invalid example 4 (unknown workflow/role references):
+
+```yaml
+modelProfiles:
+  impl-default:
+    model: o4-mini
+roles:
+  implementer:
+    modelProfile: impl-default
+workflow:
+  default:
+    parentIssueRole: planner # invalid: roles.planner missing
+    childIssueRole: implementer
+    reviewRole: implementer
+    ciFixRole: implementer
+projects:
+  my-app:
+    repo: org/my-app
+    path: ~/my-app
+    workflow: missing-workflow # invalid: workflow key not defined
+```
 
 ## Common Tasks
 

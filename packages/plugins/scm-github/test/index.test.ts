@@ -560,6 +560,76 @@ describe("scm-github plugin", () => {
     });
   });
 
+  // ---- publishReview -----------------------------------------------------
+
+  describe("publishReview", () => {
+    it("publishes an approve review", async () => {
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+      await scm.publishReview!(pr, {
+        outcome: "approve",
+        summary: "Looks good to merge.",
+      });
+      expect(ghMock).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "review",
+          "42",
+          "--repo",
+          "acme/repo",
+          "--approve",
+          "--body",
+          "Looks good to merge.",
+        ],
+        expect.any(Object),
+      );
+    });
+
+    it("publishes a request-changes review", async () => {
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+      await scm.publishReview!(pr, {
+        outcome: "request_changes",
+        summary: "Please add regression coverage.",
+      });
+      expect(ghMock).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "review",
+          "42",
+          "--repo",
+          "acme/repo",
+          "--request-changes",
+          "--body",
+          "Please add regression coverage.",
+        ],
+        expect.any(Object),
+      );
+    });
+
+    it("publishes a comment-only review", async () => {
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+      await scm.publishReview!(pr, {
+        outcome: "comment",
+        summary: "Review note only.",
+      });
+      expect(ghMock).toHaveBeenCalledWith(
+        "gh",
+        [
+          "pr",
+          "review",
+          "42",
+          "--repo",
+          "acme/repo",
+          "--comment",
+          "--body",
+          "Review note only.",
+        ],
+        expect.any(Object),
+      );
+    });
+  });
+
   // ---- getCIChecks -------------------------------------------------------
 
   describe("getCIChecks", () => {

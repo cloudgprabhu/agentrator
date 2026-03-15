@@ -1,0 +1,95 @@
+# Multiple logical projects sharing one repository path.
+# Use this when planner/reviewer/ops views of the same repo need distinct
+# project IDs, session prefixes, and workflow roles.
+
+defaults:
+  runtime: tmux
+  agent: claude-code
+  workspace: worktree
+  notifiers: [desktop]
+
+providers:
+  openai:
+    kind: openai
+    capabilities:
+      apiAuth: true
+  anthropic:
+    kind: anthropic
+    capabilities:
+      apiAuth: true
+
+authProfiles:
+  openai-api:
+    type: api-key
+    provider: openai
+    credentialEnvVar: OPENAI_API_KEY
+
+  anthropic-api:
+    type: api-key
+    provider: anthropic
+    credentialEnvVar: ANTHROPIC_API_KEY
+
+modelProfiles:
+  planner-model:
+    provider: openai
+    agent: codex
+    authProfile: openai-api
+    model: o3
+
+  implementer-model:
+    provider: anthropic
+    agent: claude-code
+    authProfile: anthropic-api
+    model: claude-sonnet-4-20250514
+
+  reviewer-model:
+    provider: openai
+    agent: codex
+    authProfile: openai-api
+    model: o4-mini
+
+roles:
+  planner:
+    modelProfile: planner-model
+  implementer:
+    modelProfile: implementer-model
+  reviewer:
+    modelProfile: reviewer-model
+
+workflow:
+  planning:
+    parentIssueRole: planner
+    childIssueRole: implementer
+    reviewRole: reviewer
+    ciFixRole: implementer
+
+projects:
+  planner:
+    name: Shared Repo Planner
+    repo: org/shared-repo
+    path: ~/src/shared-repo
+    defaultBranch: main
+    sessionPrefix: plan
+    tracker:
+      plugin: github
+    workflow: planning
+
+  implementer:
+    name: Shared Repo Implementer
+    repo: org/shared-repo
+    path: ~/src/shared-repo
+    defaultBranch: main
+    sessionPrefix: impl
+    tracker:
+      plugin: github
+    workflow: planning
+
+  reviewer:
+    name: Shared Repo Reviewer
+    repo: org/shared-repo
+    path: ~/src/shared-repo
+    defaultBranch: main
+    sessionPrefix: review
+    tracker:
+      plugin: github
+    workflow: planning

@@ -75,6 +75,75 @@ export interface DashboardSession {
   lastActivityAt: string;
   pr: DashboardPR | null;
   metadata: Record<string, string>;
+  runtime?: DashboardSessionRuntime;
+  workflow?: DashboardWorkflowContext | null;
+}
+
+export interface DashboardSessionRuntime {
+  role: string | null;
+  agent: string | null;
+  provider: string | null;
+  model: string | null;
+  authProfile: string | null;
+  authMode: string | null;
+  promptPolicy: DashboardPromptPolicy | null;
+}
+
+export interface DashboardPromptPolicy {
+  rulesFiles: string[];
+  promptPrefix: string | null;
+  guardrails: string[];
+  source: "metadata" | "resolved-config";
+}
+
+export interface DashboardWorkflowParent {
+  issueId: string;
+  issueUrl: string | null;
+  issueLabel: string;
+  issueTitle: string | null;
+  childCount: number;
+}
+
+export interface DashboardWorkflowChild {
+  taskIndex: number;
+  title: string;
+  issueId: string;
+  issueUrl: string;
+  issueLabel: string;
+  state: string;
+  isCurrent: boolean;
+  hasPR: boolean;
+  prUrl: string | null;
+  prNumber: number | null;
+  implementationSessionCount: number;
+  reviewSessionCount: number;
+}
+
+export interface DashboardWorkflowLinkage {
+  prUrl: string | null;
+  prNumber: number | null;
+  prState: string | null;
+  reviewSessionIds: string[];
+  implementationSessionIds: string[];
+}
+
+export interface DashboardWorkflowEvent {
+  label: string;
+  at: string | null;
+  description: string | null;
+}
+
+export interface DashboardWorkflowContext {
+  relationship: "planning" | "parent" | "child";
+  relationshipLabel: string;
+  state: string | null;
+  lineagePath: string;
+  taskPlanPath: string;
+  parent: DashboardWorkflowParent;
+  currentChild: DashboardWorkflowChild | null;
+  children: DashboardWorkflowChild[];
+  linkage: DashboardWorkflowLinkage | null;
+  latestEvent: DashboardWorkflowEvent | null;
 }
 
 /**
@@ -139,6 +208,8 @@ export interface SSESnapshotEvent {
     activity: ActivityState | null;
     attentionLevel: AttentionLevel;
     lastActivityAt: string;
+    runtimeVersion?: string | null;
+    workflowVersion?: string | null;
   }>;
 }
 

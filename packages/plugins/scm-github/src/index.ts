@@ -10,7 +10,6 @@ import { promisify } from "node:util";
 import {
   CI_STATUS,
   type PluginModule,
-  type SCM,
   type SCMWebhookEvent,
   type SCMWebhookRequest,
   type SCMWebhookVerificationResult,
@@ -27,6 +26,7 @@ import {
   type AutomatedComment,
   type MergeReadiness,
 } from "@composio/ao-core";
+import type { SCM, SCMReviewSubmission } from "@composio/ao-core/types";
 import {
   getWebhookHeader,
   parseWebhookBranchRef,
@@ -914,6 +914,26 @@ function createGitHubSCM(): SCM {
       } catch (err) {
         throw new Error("Failed to fetch automated comments", { cause: err });
       }
+    },
+
+    async publishReview(pr: PRInfo, review: SCMReviewSubmission): Promise<void> {
+      const outcomeFlag =
+        review.outcome === "approve"
+          ? "--approve"
+          : review.outcome === "request_changes"
+            ? "--request-changes"
+            : "--comment";
+
+      await gh([
+        "pr",
+        "review",
+        String(pr.number),
+        "--repo",
+        repoFlag(pr),
+        outcomeFlag,
+        "--body",
+        review.summary,
+      ]);
     },
 
     async getMergeability(pr: PRInfo): Promise<MergeReadiness> {

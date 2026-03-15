@@ -25,11 +25,16 @@ export function generateConfigHash(configPath: string): string {
 }
 
 /**
- * Generate project ID from project path (basename of the path).
- * Example: ~/repos/integrator → "integrator"
+ * Generate canonical project ID from config key.
+ *
+ * Backward compatibility: if a path-like value is passed (contains '/'),
+ * fall back to basename extraction to preserve legacy call sites.
  */
-export function generateProjectId(projectPath: string): string {
-  return basename(projectPath);
+export function generateProjectId(projectKeyOrPath: string): string {
+  if (projectKeyOrPath.includes("/")) {
+    return basename(projectKeyOrPath);
+  }
+  return projectKeyOrPath;
 }
 
 /**
@@ -37,9 +42,9 @@ export function generateProjectId(projectPath: string): string {
  * Format: {hash}-{projectId}
  * Example: "a3b4c5d6e7f8-integrator"
  */
-export function generateInstanceId(configPath: string, projectPath: string): string {
+export function generateInstanceId(configPath: string, projectKeyOrPath: string): string {
   const hash = generateConfigHash(configPath);
-  const projectId = generateProjectId(projectPath);
+  const projectId = generateProjectId(projectKeyOrPath);
   return `${hash}-${projectId}`;
 }
 
@@ -81,8 +86,8 @@ export function generateSessionPrefix(projectId: string): string {
  * Get the project base directory for a given config and project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}
  */
-export function getProjectBaseDir(configPath: string, projectPath: string): string {
-  const instanceId = generateInstanceId(configPath, projectPath);
+export function getProjectBaseDir(configPath: string, projectKeyOrPath: string): string {
+  const instanceId = generateInstanceId(configPath, projectKeyOrPath);
   return join(expandHome("~/.agent-orchestrator"), instanceId);
 }
 
@@ -90,40 +95,40 @@ export function getProjectBaseDir(configPath: string, projectPath: string): stri
  * Get the sessions directory for a project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}/sessions
  */
-export function getSessionsDir(configPath: string, projectPath: string): string {
-  return join(getProjectBaseDir(configPath, projectPath), "sessions");
+export function getSessionsDir(configPath: string, projectKeyOrPath: string): string {
+  return join(getProjectBaseDir(configPath, projectKeyOrPath), "sessions");
 }
 
 /**
  * Get the worktrees directory for a project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}/worktrees
  */
-export function getWorktreesDir(configPath: string, projectPath: string): string {
-  return join(getProjectBaseDir(configPath, projectPath), "worktrees");
+export function getWorktreesDir(configPath: string, projectKeyOrPath: string): string {
+  return join(getProjectBaseDir(configPath, projectKeyOrPath), "worktrees");
 }
 
 /**
  * Get the feedback reports directory for a project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}/feedback-reports
  */
-export function getFeedbackReportsDir(configPath: string, projectPath: string): string {
-  return join(getProjectBaseDir(configPath, projectPath), "feedback-reports");
+export function getFeedbackReportsDir(configPath: string, projectKeyOrPath: string): string {
+  return join(getProjectBaseDir(configPath, projectKeyOrPath), "feedback-reports");
 }
 
 /**
  * Get the archive directory for a project.
  * Format: ~/.agent-orchestrator/{hash}-{projectId}/archive
  */
-export function getArchiveDir(configPath: string, projectPath: string): string {
-  return join(getSessionsDir(configPath, projectPath), "archive");
+export function getArchiveDir(configPath: string, projectKeyOrPath: string): string {
+  return join(getSessionsDir(configPath, projectKeyOrPath), "archive");
 }
 
 /**
  * Get the .origin file path for a project.
  * This file stores the config path for collision detection.
  */
-export function getOriginFilePath(configPath: string, projectPath: string): string {
-  return join(getProjectBaseDir(configPath, projectPath), ".origin");
+export function getOriginFilePath(configPath: string, projectKeyOrPath: string): string {
+  return join(getProjectBaseDir(configPath, projectKeyOrPath), ".origin");
 }
 
 /**
