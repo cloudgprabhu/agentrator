@@ -102,7 +102,7 @@ export function registerAuth(program: Command): void {
 
         console.log(chalk.bold("Configured authProfiles:"));
         for (const [key, profile] of profiles) {
-          console.log(`  ${formatProfileSummary(key, profile as unknown as Record<string, unknown>)}`);
+          console.log(`  ${formatProfileSummary(key, profile as Record<string, unknown>)}`);
         }
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
@@ -142,7 +142,7 @@ export function registerAuth(program: Command): void {
               ]);
               return buildAuthStatusJsonEntry(
                 key,
-                profile as unknown as Record<string, unknown>,
+                profile as Record<string, unknown>,
                 status,
                 health,
               );
@@ -156,9 +156,7 @@ export function registerAuth(program: Command): void {
           chalk.bold(opts.live ? "Auth profile status (live validation):" : "Auth profile status:"),
         );
 
-        // Fetch all profiles in parallel to reduce total wait time (F02),
-        // then print results in original config order.
-        const results = await Promise.all(
+        const results = await Promise.allSettled(
           profiles.map(async ([key]) => {
             const [status, health] = await Promise.all([
               manager.getProfileStatus(key),
@@ -168,7 +166,15 @@ export function registerAuth(program: Command): void {
           }),
         );
 
-        for (const { key, status, health } of results) {
+        let hadError = false;
+        for (const result of results) {
+          if (result.status === "rejected") {
+            console.error(chalk.red(result.reason instanceof Error ? result.reason.message : String(result.reason)));
+            hadError = true;
+            continue;
+          }
+
+          const { key, status, health } = result.value;
           const statusText = `${status.status}: ${status.message}`;
           const color =
             status.status === "authenticated"
@@ -186,6 +192,10 @@ export function registerAuth(program: Command): void {
           for (const check of health.checks.filter((entry) => entry.status === "warn")) {
             console.log(chalk.yellow(`    Warning: ${check.detail}`));
           }
+        }
+
+        if (hadError) {
+          process.exit(1);
         }
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
