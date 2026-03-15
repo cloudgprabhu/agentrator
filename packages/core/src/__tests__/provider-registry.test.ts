@@ -4,54 +4,10 @@ import {
   isAgentCompatibleWithProvider,
   isModelCompatibleWithProvider,
   listSupportedProviders,
-  validateProviderCompatibility,
 } from "../provider-registry.js";
-import type { OrchestratorConfig } from "../types.js";
-
-function makeConfig(overrides: Partial<OrchestratorConfig> = {}): OrchestratorConfig {
-  return {
-    configPath: "/tmp/agent-orchestrator.yaml",
-    port: 3000,
-    readyThresholdMs: 300_000,
-    defaults: {
-      runtime: "tmux",
-      agent: "claude-code",
-      workspace: "worktree",
-      notifiers: ["desktop"],
-    },
-    providers: {
-      anthropic: {
-        kind: "anthropic",
-        defaultAgentPlugin: "claude-code",
-      },
-    },
-    authProfiles: {
-      claudeBrowser: {
-        type: "browser-account",
-        provider: "anthropic",
-      },
-    },
-    modelProfiles: {},
-    roles: {},
-    workflow: {},
-    projects: {
-      app: {
-        name: "app",
-        repo: "org/app",
-        path: "/repos/app",
-        defaultBranch: "main",
-        sessionPrefix: "app",
-      },
-    },
-    notifiers: {},
-    notificationRouting: { urgent: [], action: [], warning: [], info: [] },
-    reactions: {},
-    ...overrides,
-  };
-}
 
 describe("provider registry", () => {
-  it("lists initial supported providers", () => {
+  it("lists all supported providers", () => {
     const providers = listSupportedProviders();
     const kinds = providers.map((p) => p.kind);
     expect(kinds).toContain("anthropic");
@@ -74,7 +30,7 @@ describe("provider registry", () => {
     expect(isAgentCompatibleWithProvider("custom-provider", "anything")).toBe(true);
   });
 
-  it("checks model compatibility heuristics for supported providers", () => {
+  it("checks model compatibility with providers", () => {
     expect(isModelCompatibleWithProvider("anthropic", "claude-sonnet-4-20250514")).toBe(true);
     expect(isModelCompatibleWithProvider("anthropic", "claude-3-7-sonnet")).toBe(true);
     expect(isModelCompatibleWithProvider("anthropic", "gpt-4.1")).toBe(false);
@@ -101,47 +57,5 @@ describe("provider registry", () => {
 
     const freshAnthropic = getProviderByKind("anthropic");
     expect(freshAnthropic?.displayName).toBe("Anthropic");
-  });
-
-  it("validates provider + auth profile compatibility", () => {
-    const errors = validateProviderCompatibility(
-      makeConfig({
-        providers: {
-          anthropic: {
-            kind: "anthropic",
-            defaultAgentPlugin: "codex",
-          },
-        },
-        authProfiles: {
-          badAws: {
-            type: "aws-profile",
-            provider: "anthropic",
-          },
-        },
-      }),
-    );
-
-    expect(errors.some((e) => e.includes("defaultAgentPlugin"))).toBe(true);
-    expect(errors.some((e) => e.includes("not supported by provider"))).toBe(true);
-  });
-
-  it("validates modelProfile provider/agent compatibility", () => {
-    const errors = validateProviderCompatibility(
-      makeConfig({
-        providers: {
-          openai: { kind: "openai" },
-        },
-        authProfiles: {},
-        modelProfiles: {
-          bad: {
-            provider: "openai",
-            agent: "claude-code",
-            model: "o4-mini",
-          },
-        },
-      }),
-    );
-
-    expect(errors.some((e) => e.includes("modelProfiles.bad.agent"))).toBe(true);
   });
 });

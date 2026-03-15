@@ -1,4 +1,5 @@
-import type { AuthProfileType, OrchestratorConfig, ProviderKind } from "./types.js";
+export type AuthProfileType = "browser-account" | "api-key" | "aws-profile" | "console";
+export type ProviderKind = "anthropic" | "openai" | "bedrock" | "custom";
 
 export interface ProviderCapabilitiesMetadata {
   browserAuth: boolean;
@@ -187,64 +188,4 @@ export function isModelCompatibleWithProvider(kind: string, model: string): bool
   }
 
   return false;
-}
-
-export function validateProviderCompatibility(config: OrchestratorConfig): string[] {
-  const errors: string[] = [];
-
-  for (const [providerKey, provider] of Object.entries(config.providers ?? {})) {
-    const metadata = getProviderByKind(provider.kind);
-    if (!metadata) {
-      if (provider.kind !== "custom") {
-        errors.push(
-          `providers.${providerKey}.kind "${provider.kind}" is not in supported provider registry (anthropic/openai/bedrock/custom)`,
-        );
-      }
-      continue;
-    }
-
-    if (
-      provider.defaultAgentPlugin &&
-      !isAgentCompatibleWithProvider(provider.kind, provider.defaultAgentPlugin)
-    ) {
-      errors.push(
-        `providers.${providerKey}.defaultAgentPlugin "${provider.defaultAgentPlugin}" is not compatible with provider kind "${provider.kind}"`,
-      );
-    }
-  }
-
-  for (const [authProfileKey, profile] of Object.entries(config.authProfiles ?? {})) {
-    if (!profile.provider) continue;
-    const provider = config.providers?.[profile.provider];
-    if (!provider) continue;
-
-    const metadata = getProviderByKind(provider.kind);
-    if (!metadata) continue;
-
-    if (!metadata.capabilities.supportedAuthProfileTypes.includes(profile.type)) {
-      errors.push(
-        `authProfiles.${authProfileKey}.type "${profile.type}" is not supported by provider "${profile.provider}" (${provider.kind})`,
-      );
-    }
-  }
-
-  for (const [modelProfileKey, modelProfile] of Object.entries(config.modelProfiles ?? {})) {
-    if (!modelProfile.provider || !modelProfile.agent) continue;
-    const provider = config.providers?.[modelProfile.provider];
-    if (!provider) continue;
-
-    if (!isAgentCompatibleWithProvider(provider.kind, modelProfile.agent)) {
-      errors.push(
-        `modelProfiles.${modelProfileKey}.agent "${modelProfile.agent}" is not compatible with provider "${modelProfile.provider}" (${provider.kind})`,
-      );
-    }
-
-    if (!isModelCompatibleWithProvider(provider.kind, modelProfile.model)) {
-      errors.push(
-        `modelProfiles.${modelProfileKey}.model "${modelProfile.model}" is not compatible with provider "${modelProfile.provider}" (${provider.kind})`,
-      );
-    }
-  }
-
-  return errors;
 }
