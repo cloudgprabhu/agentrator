@@ -4,11 +4,11 @@ export default defineConfig({
   test: {
     include: ["__tests__/**/*.test.ts"],
     testTimeout: 10000,
-    pool: "threads",
+    pool: "forks",
     poolOptions: {
-      threads: {
-        minThreads: 1,
-        maxThreads: 8,
+      forks: {
+        minForks: 1,
+        maxForks: 8,
       },
     },
   },
