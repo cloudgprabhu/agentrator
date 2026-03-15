@@ -4,6 +4,8 @@ import { Command } from "commander";
 const { mockConfigRef, mockManager } = vi.hoisted(() => ({
   mockConfigRef: { current: null as Record<string, unknown> | null },
   mockManager: {
+    inspectProfile: vi.fn(),
+    inspectAllProfiles: vi.fn(),
     getProfileStatus: vi.fn(),
     checkProfileHealth: vi.fn(),
     loginProfile: vi.fn(),
@@ -40,6 +42,8 @@ beforeEach(() => {
 
   mockManager.getProfileStatus.mockReset();
   mockManager.checkProfileHealth.mockReset();
+  mockManager.inspectProfile.mockReset();
+  mockManager.inspectAllProfiles.mockReset();
   mockManager.loginProfile.mockReset();
   mockManager.logoutProfile.mockReset();
   mockManager.checkProfileHealth.mockResolvedValue({
@@ -47,6 +51,23 @@ beforeEach(() => {
     authStatus: "authenticated",
     message: "ok",
     checks: [],
+  });
+  mockManager.inspectProfile.mockImplementation(
+    async (profile: string, options?: { live?: boolean }) => ({
+      status: await mockManager.getProfileStatus(profile),
+      health: await mockManager.checkProfileHealth(profile, options),
+    }),
+  );
+  mockManager.inspectAllProfiles.mockImplementation(async (options?: { live?: boolean }) => {
+    const profileKeys = Object.keys(
+      (mockConfigRef.current?.["authProfiles"] as Record<string, unknown> | undefined) ?? {},
+    );
+    const entries = await Promise.all(
+      profileKeys.map(
+        async (profile) => [profile, await mockManager.inspectProfile(profile, options)] as const,
+      ),
+    );
+    return Object.fromEntries(entries);
   });
 
   mockConfigRef.current = {
@@ -78,7 +99,9 @@ describe("auth command", () => {
 
     const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(output).toContain("No authProfiles configured.");
-    expect(output).toContain("Add authProfiles to agent-orchestrator.yaml to enable auth commands.");
+    expect(output).toContain(
+      "Add authProfiles to agent-orchestrator.yaml to enable auth commands.",
+    );
     expect(mockManager.getProfileStatus).not.toHaveBeenCalled();
   });
 
@@ -87,9 +110,7 @@ describe("auth command", () => {
 
     await program.parseAsync(["node", "test", "auth", "status", "--json"]);
 
-    expect(logSpy).toHaveBeenCalledWith(
-      JSON.stringify({ profiles: [] }, null, 2),
-    );
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ profiles: [] }, null, 2));
     expect(mockManager.getProfileStatus).not.toHaveBeenCalled();
   });
 
@@ -117,8 +138,8 @@ describe("auth command", () => {
 
     await program.parseAsync(["node", "test", "auth", "status"]);
 
-    expect(mockManager.getProfileStatus).toHaveBeenCalledWith("openaiApi");
-    expect(mockManager.getProfileStatus).toHaveBeenCalledWith("codexBrowser");
+    expect(mockManager.inspectProfile).toHaveBeenCalledWith("openaiApi", { live: undefined });
+    expect(mockManager.inspectProfile).toHaveBeenCalledWith("codexBrowser", { live: undefined });
 
     const output = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(output).toContain("authenticated");
@@ -145,7 +166,13 @@ describe("auth command", () => {
           state: "healthy",
           authStatus: "authenticated",
           message: "ok",
-          checks: [{ key: "credential-reference", status: "pass", detail: "Credential reference configured" }],
+          checks: [
+            {
+              key: "credential-reference",
+              status: "pass",
+              detail: "Credential reference configured",
+            },
+          ],
         };
       }
       return {
@@ -164,6 +191,8 @@ describe("auth command", () => {
     });
 
     await program.parseAsync(["node", "test", "auth", "status", "--json"]);
+
+    expect(mockManager.inspectAllProfiles).toHaveBeenCalledWith({ live: undefined });
 
     const payload = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
     expect(payload).toEqual({
@@ -217,8 +246,7 @@ describe("auth command", () => {
 
     await program.parseAsync(["node", "test", "auth", "status", "--json", "--live"]);
 
-    expect(mockManager.checkProfileHealth).toHaveBeenCalledWith("openaiApi", { live: true });
-    expect(mockManager.checkProfileHealth).toHaveBeenCalledWith("codexBrowser", { live: true });
+    expect(mockManager.inspectAllProfiles).toHaveBeenCalledWith({ live: true });
 
     const payload = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
     expect(payload.profiles[0]).toEqual(
@@ -269,7 +297,7 @@ describe("auth command", () => {
 
     await program.parseAsync(["node", "test", "auth", "status", "--live"]);
 
-    expect(mockManager.checkProfileHealth).toHaveBeenCalledWith("openaiApi", { live: true });
+    expect(mockManager.inspectProfile).toHaveBeenCalledWith("openaiApi", { live: true });
     expect(logSpy.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
       "Auth profile status (live validation):",
     );

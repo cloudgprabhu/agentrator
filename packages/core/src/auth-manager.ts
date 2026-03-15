@@ -3,6 +3,7 @@ import type {
   AuthHealthCheckOptions,
   AuthHealthCheckResult,
   AuthManager,
+  AuthProfileInspectionResult,
   AuthProfileConfig,
   AuthProviderAdapter,
   AuthStatusResult,
@@ -203,13 +204,54 @@ export function createAuthManager(deps: AuthManagerDeps): AuthManager {
     ...adapters,
   ];
 
-  async function getStatusForProfile(profileKey: string): Promise<AuthStatusResult> {
-    const context = buildProfileContext(config, profileKey);
-    const adapter = pickAdapter(adapterList, context);
+  async function getStatusForContext(
+    context: AuthAdapterContext,
+    adapter?: AuthProviderAdapter,
+  ): Promise<AuthStatusResult> {
     if (adapter?.getStatus) {
       return adapter.getStatus(context);
     }
     return defaultAuthStatusForProfile(context.profile);
+  }
+
+  async function getHealthForContext(
+    context: AuthAdapterContext,
+    adapter: AuthProviderAdapter | undefined,
+    options?: AuthHealthCheckOptions,
+    statusResult?: Promise<AuthStatusResult> | AuthStatusResult,
+  ): Promise<AuthHealthCheckResult> {
+    if (options?.live) {
+      if (adapter?.validateLive) {
+        return adapter.validateLive(context);
+      }
+      const baseline = adapter ? await adapter.checkHealth(context) : defaultHealth(context);
+      return withLiveValidationFallback(context, baseline);
+    }
+
+    if (adapter) {
+      return adapter.checkHealth(context);
+    }
+
+    const health = defaultHealth(context);
+    const status =
+      statusResult === undefined ? await getStatusForContext(context, adapter) : await statusResult;
+    return { ...health, authStatus: status.status };
+  }
+
+  async function inspectProfile(
+    profileKey: string,
+    options?: AuthHealthCheckOptions,
+  ): Promise<AuthProfileInspectionResult> {
+    const context = buildProfileContext(config, profileKey);
+    const adapter = pickAdapter(adapterList, context);
+    const status = getStatusForContext(context, adapter);
+    const health = getHealthForContext(context, adapter, options, status);
+    const [resolvedStatus, resolvedHealth] = await Promise.all([status, health]);
+
+    return {
+      status: resolvedStatus,
+      health: resolvedHealth,
+    };
   }
 
   return {
@@ -217,8 +259,28 @@ export function createAuthManager(deps: AuthManagerDeps): AuthManager {
       return resolveAuthProfile(config, profileKey);
     },
 
+    async inspectProfile(
+      profileKey: string,
+      options?: AuthHealthCheckOptions,
+    ): Promise<AuthProfileInspectionResult> {
+      return inspectProfile(profileKey, options);
+    },
+
+    async inspectAllProfiles(
+      options?: AuthHealthCheckOptions,
+    ): Promise<Record<string, AuthProfileInspectionResult>> {
+      const entries = await Promise.all(
+        Object.keys(config.authProfiles ?? {}).map(
+          async (key) => [key, await inspectProfile(key, options)] as const,
+        ),
+      );
+      return Object.fromEntries(entries);
+    },
+
     async getProfileStatus(profileKey: string): Promise<AuthStatusResult> {
-      return getStatusForProfile(profileKey);
+      const context = buildProfileContext(config, profileKey);
+      const adapter = pickAdapter(adapterList, context);
+      return getStatusForContext(context, adapter);
     },
 
     async loginProfile(profileKey: string): Promise<AuthStatusResult> {
@@ -251,29 +313,18 @@ export function createAuthManager(deps: AuthManagerDeps): AuthManager {
     ): Promise<AuthHealthCheckResult> {
       const context = buildProfileContext(config, profileKey);
       const adapter = pickAdapter(adapterList, context);
-      if (options?.live) {
-        if (adapter?.validateLive) {
-          return adapter.validateLive(context);
-        }
-        const baseline = adapter ? await adapter.checkHealth(context) : defaultHealth(context);
-        return withLiveValidationFallback(context, baseline);
-      }
-      if (adapter) {
-        return adapter.checkHealth(context);
-      }
-      const health = defaultHealth(context);
-      const status = await getStatusForProfile(profileKey);
-      return { ...health, authStatus: status.status };
+      return getHealthForContext(context, adapter, options);
     },
 
     async checkAllProfilesHealth(
       options?: AuthHealthCheckOptions,
     ): Promise<Record<string, AuthHealthCheckResult>> {
-      const results: Record<string, AuthHealthCheckResult> = {};
-      for (const key of Object.keys(config.authProfiles ?? {})) {
-        results[key] = await this.checkProfileHealth(key, options);
-      }
-      return results;
+      const entries = await Promise.all(
+        Object.keys(config.authProfiles ?? {}).map(
+          async (key) => [key, await this.checkProfileHealth(key, options)] as const,
+        ),
+      );
+      return Object.fromEntries(entries);
     },
   };
 }
