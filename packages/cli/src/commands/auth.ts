@@ -134,19 +134,14 @@ export function registerAuth(program: Command): void {
 
         const manager: AuthManager = createAuthManager({ config });
         if (opts.json) {
-          const entries = await Promise.all(
-            profiles.map(async ([key, profile]) => {
-              const [status, health] = await Promise.all([
-                manager.getProfileStatus(key),
-                manager.checkProfileHealth(key, { live: opts.live }),
-              ]);
-              return buildAuthStatusJsonEntry(
-                key,
-                profile as Record<string, unknown>,
-                status,
-                health,
-              );
-            }),
+          const inspections = await manager.inspectAllProfiles({ live: opts.live });
+          const entries = profiles.map(([key, profile]) =>
+            buildAuthStatusJsonEntry(
+              key,
+              profile as Record<string, unknown>,
+              inspections[key].status,
+              inspections[key].health,
+            ),
           );
           console.log(JSON.stringify({ profiles: entries }, null, 2));
           return;
@@ -158,23 +153,27 @@ export function registerAuth(program: Command): void {
 
         const results = await Promise.allSettled(
           profiles.map(async ([key]) => {
-            const [status, health] = await Promise.all([
-              manager.getProfileStatus(key),
-              manager.checkProfileHealth(key, { live: opts.live }),
-            ]);
-            return { key, status, health };
+            const inspection = await manager.inspectProfile(key, { live: opts.live });
+            return { key, inspection };
           }),
         );
 
         let hadError = false;
         for (const result of results) {
           if (result.status === "rejected") {
-            console.error(chalk.red(result.reason instanceof Error ? result.reason.message : String(result.reason)));
+            console.error(
+              chalk.red(
+                result.reason instanceof Error ? result.reason.message : String(result.reason),
+              ),
+            );
             hadError = true;
             continue;
           }
 
-          const { key, status, health } = result.value;
+          const {
+            key,
+            inspection: { status, health },
+          } = result.value;
           const statusText = `${status.status}: ${status.message}`;
           const color =
             status.status === "authenticated"

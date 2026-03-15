@@ -586,10 +586,7 @@ export interface SCM {
   getAutomatedComments(pr: PRInfo): Promise<AutomatedComment[]>;
 
   /** Publish a review outcome to the SCM-native PR/MR review surface, if supported. */
-  publishReview?(
-    pr: PRInfo,
-    review: SCMReviewSubmission,
-  ): Promise<void>;
+  publishReview?(pr: PRInfo, review: SCMReviewSubmission): Promise<void>;
 
   // --- Merge Readiness ---
 
@@ -1116,6 +1113,11 @@ export interface AuthStatusResult {
   message: string;
 }
 
+export interface AuthProfileInspectionResult {
+  status: AuthStatusResult;
+  health: AuthHealthCheckResult;
+}
+
 /**
  * Pluggable auth adapter contract.
  *
@@ -1134,6 +1136,13 @@ export interface AuthProviderAdapter {
 
 export interface AuthManager {
   resolveProfile(profileKey: string): ResolvedAuthProfile;
+  inspectProfile(
+    profileKey: string,
+    options?: AuthHealthCheckOptions,
+  ): Promise<AuthProfileInspectionResult>;
+  inspectAllProfiles(
+    options?: AuthHealthCheckOptions,
+  ): Promise<Record<string, AuthProfileInspectionResult>>;
   getProfileStatus(profileKey: string): Promise<AuthStatusResult>;
   loginProfile(profileKey: string): Promise<AuthStatusResult>;
   logoutProfile(profileKey: string): Promise<AuthStatusResult>;

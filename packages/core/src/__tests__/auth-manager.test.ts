@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProviderAdapter, OrchestratorConfig } from "../types.js";
 import { createAuthManager } from "../auth-manager.js";
 import { resolveAuthProfile } from "../auth-profile-resolver.js";
@@ -133,6 +133,61 @@ describe("auth manager", () => {
     expect(statuses.api).toBeDefined();
   });
 
+  it("inspects a profile with status and health in one call", async () => {
+    const manager = createAuthManager({ config: makeConfig(), defaultAdapters: [] });
+    const inspection = await manager.inspectProfile("api");
+
+    expect(inspection.status.status).toBe("authenticated");
+    expect(inspection.health.state).toBe("healthy");
+  });
+
+  it("runs all profile health checks in parallel", async () => {
+    let activeChecks = 0;
+    let peakConcurrency = 0;
+    const waitForAllChecks = vi.fn(async () => {
+      activeChecks += 1;
+      peakConcurrency = Math.max(peakConcurrency, activeChecks);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      activeChecks -= 1;
+
+      return {
+        state: "healthy" as const,
+        message: "ok",
+        checks: [{ key: "adapter", status: "pass" as const, detail: "ok" }],
+      };
+    });
+
+    const manager = createAuthManager({
+      config: makeConfig({
+        authProfiles: {
+          apiOne: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY_ONE",
+          },
+          apiTwo: {
+            type: "api-key",
+            provider: "openai",
+            credentialEnvVar: "OPENAI_API_KEY_TWO",
+          },
+        },
+      }),
+      defaultAdapters: [],
+      adapters: [
+        {
+          name: "parallel-health-adapter",
+          supports: () => true,
+          checkHealth: waitForAllChecks,
+        },
+      ],
+    });
+
+    await manager.checkAllProfilesHealth();
+
+    expect(waitForAllChecks).toHaveBeenCalledTimes(2);
+    expect(peakConcurrency).toBeGreaterThan(1);
+  });
+
   it("integrates OpenAI Codex adapter for browser-account status", async () => {
     const manager = createAuthManager({
       config: makeConfig(),
@@ -190,14 +245,11 @@ describe("auth manager", () => {
     const manager = createAuthManager({
       config: makeConfig(),
       defaultAdapters: [
-        createOpenAIApiKeyAuthAdapter(
-          { OPENAI_API_KEY: "sk-ref" },
-          async () => ({
-            ok: true,
-            status: 200,
-            text: async () => "{}",
-          }),
-        ),
+        createOpenAIApiKeyAuthAdapter({ OPENAI_API_KEY: "sk-ref" }, async () => ({
+          ok: true,
+          status: 200,
+          text: async () => "{}",
+        })),
       ],
     });
 
