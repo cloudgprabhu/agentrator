@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const dynamic = "force-dynamic";
 import { Dashboard } from "@/components/Dashboard";
-import type { DashboardSession } from "@/lib/types";
+import type { DashboardIssue, DashboardSession } from "@/lib/types";
 import { getServices, getSCM } from "@/lib/services";
 import {
   sessionToDashboard,
@@ -14,6 +14,7 @@ import { prCache, prCacheKey } from "@/lib/cache";
 import { getPrimaryProjectId, getProjectName, getAllProjects } from "@/lib/project-name";
 import { filterWorkerSessions, findOrchestratorSessionId } from "@/lib/project-utils";
 import { resolveGlobalPause, type GlobalPauseState } from "@/lib/global-pause";
+import type { OrchestratorConfig, PluginRegistry, Tracker } from "@composio/ao-core";
 
 function getSelectedProjectName(projectFilter: string | undefined): string {
   if (projectFilter === "all") return "All Projects";
@@ -23,6 +24,33 @@ function getSelectedProjectName(projectFilter: string | undefined): string {
     if (selectedProject) return selectedProject.name;
   }
   return getProjectName();
+}
+
+async function listDashboardIssues(
+  projectFilter: string,
+  config: OrchestratorConfig,
+  registry: PluginRegistry,
+): Promise<DashboardIssue[]> {
+  const issues: DashboardIssue[] = [];
+
+  for (const [projectId, project] of Object.entries(config.projects)) {
+    if (projectFilter !== "all" && projectId !== projectFilter) continue;
+    if (!project.tracker) continue;
+
+    const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
+    if (!tracker?.listIssues) continue;
+
+    try {
+      const projectIssues = await tracker.listIssues({ state: "open", limit: 12 }, project);
+      for (const issue of projectIssues) {
+        issues.push({ projectId, ...issue });
+      }
+    } catch {
+      // Ignore trackers that are unavailable at render time.
+    }
+  }
+
+  return issues.slice(0, 12);
 }
 
 export async function generateMetadata(props: {
@@ -37,6 +65,7 @@ export async function generateMetadata(props: {
 export default async function Home(props: { searchParams: Promise<{ project?: string }> }) {
   const searchParams = await props.searchParams;
   let sessions: DashboardSession[] = [];
+  let issues: DashboardIssue[];
   let orchestratorId: string | null;
   let globalPause: GlobalPauseState | null;
   // Allow ?project=all to show all sessions (for multi-project setups)
@@ -53,6 +82,11 @@ export default async function Home(props: { searchParams: Promise<{ project?: st
     const coreSessions = filterWorkerSessions(allSessions, projectFilter, config.projects);
 
     sessions = coreSessions.map(sessionToDashboard);
+
+    const issuesTimeout = new Promise<DashboardIssue[]>((resolve) =>
+      setTimeout(() => resolve([]), 2_500),
+    );
+    issues = await Promise.race([listDashboardIssues(projectFilter, config, registry), issuesTimeout]);
 
     const metaTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
     await Promise.race([
@@ -107,6 +141,7 @@ export default async function Home(props: { searchParams: Promise<{ project?: st
     await Promise.race([Promise.allSettled(enrichPromises), enrichTimeout]);
   } catch {
     sessions = [];
+    issues = [];
     orchestratorId = null;
     globalPause = null;
   }
@@ -123,6 +158,7 @@ export default async function Home(props: { searchParams: Promise<{ project?: st
       projectName={projectName}
       projects={projects}
       initialGlobalPause={globalPause}
+      initialIssues={issues}
     />
   );
 }
