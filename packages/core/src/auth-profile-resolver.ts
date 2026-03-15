@@ -56,7 +56,7 @@ export function resolveAuthProfile(
     );
   }
 
-  const inlineSecretPaths = hasInlineSecretValues(profile as unknown as Record<string, unknown>);
+  const inlineSecretPaths = hasInlineSecretValues(profile as Record<string, unknown>);
   if (inlineSecretPaths.length > 0) {
     throw new Error(
       `authProfiles.${profileKey} contains inline secret values at ${inlineSecretPaths.join(", ")}; use credentialRef/credentialEnvVar references instead`,

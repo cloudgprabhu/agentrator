@@ -897,6 +897,12 @@ export interface OrchestratorConfig {
   /** Project configurations */
   projects: Record<string, ProjectConfig>;
 
+  /** Provider definitions used for model/auth resolution */
+  providers?: Record<string, ProviderConfig>;
+
+  /** Authentication profile definitions */
+  authProfiles?: Record<string, AuthProfileConfig>;
+
   /** Notification channel configs */
   notifiers: Record<string, NotifierConfig>;
 
@@ -905,12 +911,6 @@ export interface OrchestratorConfig {
 
   /** Default reaction configs */
   reactions: Record<string, ReactionConfig>;
-
-  /** Provider definitions used for model/auth resolution */
-  providers?: Record<string, ProviderConfig>;
-
-  /** Authentication profile definitions */
-  authProfiles?: Record<string, AuthProfileConfig>;
 }
 
 export interface DefaultPlugins {
@@ -1068,6 +1068,134 @@ export function normalizeAgentPermissionMode(
     return undefined;
   }
   return mode;
+}
+
+// =============================================================================
+// AUTH SYSTEM
+// =============================================================================
+
+export type ProviderKind =
+  | "anthropic"
+  | "openai"
+  | "bedrock"
+  | "azure-openai"
+  | "google"
+  | "custom"
+  | (string & {});
+
+export interface ProviderConfig {
+  /** Provider platform identifier (openai, anthropic, bedrock, etc.) */
+  kind: ProviderKind;
+  /** Optional display label */
+  displayName?: string;
+  /** Agent plugin used when role/model profile does not override it */
+  defaultAgentPlugin?: string;
+  /** Capability hints used for future reference validation */
+  capabilities?: {
+    browserAuth?: boolean;
+    apiAuth?: boolean;
+    supportsRoleOverride?: boolean;
+  };
+  /** Provider-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export type AuthProfileType =
+  | "browser-account"
+  | "api-key"
+  | "aws-profile"
+  | "console"
+  | (string & {});
+
+export interface AuthProfileConfig {
+  /** Auth strategy type */
+  type: AuthProfileType;
+  /** Optional provider key this auth profile belongs to */
+  provider?: string;
+  /** Optional display label */
+  displayName?: string;
+  /** Optional env var containing secret/token */
+  credentialEnvVar?: string;
+  /** Optional opaque credential reference (vault/keychain/secret id) */
+  credentialRef?: string;
+  /** Optional account type hint for browser-account profiles */
+  accountType?: "claude-pro" | "claude-max" | "chatgpt-plus" | "chatgpt-pro" | (string & {});
+  /** Auth-specific extension fields */
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export type AuthHealthState = "healthy" | "degraded" | "invalid" | "unconfigured";
+
+export interface ResolvedAuthProfile {
+  key: string;
+  profile: AuthProfileConfig;
+  providerKey?: string;
+  provider?: ProviderConfig;
+}
+
+export interface AuthHealthCheckResult {
+  state: AuthHealthState;
+  authStatus?: AuthStatusValue;
+  message: string;
+  checks: Array<{
+    key: string;
+    status: "pass" | "warn" | "fail";
+    detail: string;
+  }>;
+}
+
+export interface AuthHealthCheckOptions {
+  live?: boolean;
+}
+
+export interface AuthAdapterContext {
+  profileKey: string;
+  profile: AuthProfileConfig;
+  providerKey?: string;
+  provider?: ProviderConfig;
+}
+
+export type AuthStatusValue =
+  | "authenticated"
+  | "not_authenticated"
+  | "unavailable"
+  | "unsupported_environment";
+
+export interface AuthStatusResult {
+  status: AuthStatusValue;
+  message: string;
+}
+
+/**
+ * Pluggable auth adapter contract.
+ *
+ * Adapters can be bound to one or more providers/types and implement
+ * provider-specific auth health checks without exposing secrets.
+ */
+export interface AuthProviderAdapter {
+  name: string;
+  supports(context: AuthAdapterContext): boolean;
+  checkHealth(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
+  validateLive?(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
+  getStatus?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+  login?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+  logout?(context: AuthAdapterContext): Promise<AuthStatusResult>;
+}
+
+export interface AuthManager {
+  resolveProfile(profileKey: string): ResolvedAuthProfile;
+  getProfileStatus(profileKey: string): Promise<AuthStatusResult>;
+  loginProfile(profileKey: string): Promise<AuthStatusResult>;
+  logoutProfile(profileKey: string): Promise<AuthStatusResult>;
+  checkProfileHealth(
+    profileKey: string,
+    options?: AuthHealthCheckOptions,
+  ): Promise<AuthHealthCheckResult>;
+  checkAllProfilesHealth(
+    options?: AuthHealthCheckOptions,
+  ): Promise<Record<string, AuthHealthCheckResult>>;
 }
 
 // =============================================================================
@@ -1286,114 +1414,4 @@ export class SessionNotFoundError extends Error {
     super(`Session not found: ${sessionId}`);
     this.name = "SessionNotFoundError";
   }
-}
-
-// ---------------------------------------------------------------------------
-// Provider and auth profile types
-// ---------------------------------------------------------------------------
-
-export interface ProviderConfig {
-  /** Provider platform identifier (openai, anthropic, bedrock, custom, etc.) */
-  kind: string;
-  /** Optional display label */
-  displayName?: string;
-  /** Agent plugin used when role/model profile does not override it */
-  defaultAgentPlugin?: string;
-  /** Capability hints */
-  capabilities?: {
-    browserAuth?: boolean;
-    apiAuth?: boolean;
-    supportsRoleOverride?: boolean;
-  };
-  /** Provider-specific extension fields */
-  options?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-export type AuthProfileType = "browser-account" | "api-key" | "aws-profile" | "console";
-
-export interface AuthProfileConfig {
-  /** Auth strategy type */
-  type: AuthProfileType;
-  /** Optional provider key this auth profile belongs to */
-  provider?: string;
-  /** Account type sub-classification (e.g. "claude-pro", "chatgpt-plus") */
-  accountType?: string;
-  /** Env var name whose value is the credential */
-  credentialEnvVar?: string;
-  /** External secret store reference */
-  credentialRef?: string;
-  /** Auth-specific extension fields */
-  options?: Record<string, unknown>;
-}
-
-export type AuthHealthState = "healthy" | "degraded" | "invalid" | "unconfigured";
-
-export interface ResolvedAuthProfile {
-  key: string;
-  profile: AuthProfileConfig;
-  providerKey?: string;
-  provider?: ProviderConfig;
-}
-
-export interface AuthHealthCheckResult {
-  state: AuthHealthState;
-  authStatus?: AuthStatusValue;
-  message: string;
-  checks: Array<{
-    key: string;
-    status: "pass" | "warn" | "fail";
-    detail: string;
-  }>;
-}
-
-export interface AuthHealthCheckOptions {
-  live?: boolean;
-}
-
-export interface AuthAdapterContext {
-  profileKey: string;
-  profile: AuthProfileConfig;
-  providerKey?: string;
-  provider?: ProviderConfig;
-}
-
-export type AuthStatusValue =
-  | "authenticated"
-  | "not_authenticated"
-  | "unavailable"
-  | "unsupported_environment";
-
-export interface AuthStatusResult {
-  status: AuthStatusValue;
-  message: string;
-}
-
-/**
- * Pluggable auth adapter contract.
- * Adapters implement provider-specific auth status checks and
- * provider-specific auth health checks without exposing secrets.
- */
-export interface AuthProviderAdapter {
-  name: string;
-  supports(context: AuthAdapterContext): boolean;
-  checkHealth(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
-  validateLive?(context: AuthAdapterContext): Promise<AuthHealthCheckResult>;
-  getStatus?(context: AuthAdapterContext): Promise<AuthStatusResult>;
-  login?(context: AuthAdapterContext): Promise<AuthStatusResult>;
-  logout?(context: AuthAdapterContext): Promise<AuthStatusResult>;
-}
-
-export interface AuthManager {
-  resolveProfile(profileKey: string): ResolvedAuthProfile;
-  getProfileStatus(profileKey: string): Promise<AuthStatusResult>;
-  loginProfile(profileKey: string): Promise<AuthStatusResult>;
-  logoutProfile(profileKey: string): Promise<AuthStatusResult>;
-  checkProfileHealth(
-    profileKey: string,
-    options?: AuthHealthCheckOptions,
-  ): Promise<AuthHealthCheckResult>;
-  checkAllProfilesHealth(
-    options?: AuthHealthCheckOptions,
-  ): Promise<Record<string, AuthHealthCheckResult>>;
 }
