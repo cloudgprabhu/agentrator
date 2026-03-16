@@ -708,9 +708,16 @@ export interface AutomatedComment {
   url: string;
 }
 
+export interface SCMInlineReviewComment {
+  path: string;
+  line: number;
+  body: string;
+}
+
 export interface SCMReviewSubmission {
   outcome: "approve" | "request_changes" | "comment";
   summary: string;
+  comments?: SCMInlineReviewComment[];
 }
 
 // --- Merge Readiness ---

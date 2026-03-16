@@ -25,6 +25,7 @@ import {
   type AutomatedComment,
   type MergeReadiness,
 } from "@composio/ao-core";
+import type { SCMInlineReviewComment, SCMReviewSubmission } from "@composio/ao-core/types";
 import {
   getWebhookHeader,
   parseWebhookBranchRef,
@@ -32,7 +33,7 @@ import {
   parseWebhookTimestamp,
 } from "@composio/ao-core/scm-webhook-utils";
 
-import { glab, parseJSON, stripHost } from "./glab-utils.js";
+import { extractHost, glab, parseJSON, stripHost } from "./glab-utils.js";
 
 const BOT_AUTHORS = new Set([
   "gitlab-bot",
@@ -73,6 +74,46 @@ function extractHostFromOwner(owner: string): string | undefined {
 
 function encodeProjectId(owner: string, repo: string): string {
   return encodeURIComponent(stripHost(`${owner}/${repo}`));
+}
+
+function parseProjectRepo(projectRepo: string): { owner: string; repo: string } {
+  const parts = projectRepo.split("/");
+  if (parts.length < 2 || !parts[0] || !parts[parts.length - 1]) {
+    throw new Error(`Invalid repo format "${projectRepo}", expected "owner/repo"`);
+  }
+  return {
+    owner: parts.slice(0, -1).join("/"),
+    repo: parts[parts.length - 1],
+  };
+}
+
+function prInfoFromMergeRequest(
+  data: {
+    iid: number;
+    web_url: string;
+    title: string;
+    source_branch: string;
+    target_branch: string;
+    draft?: boolean;
+  },
+  projectRepo: string,
+): PRInfo {
+  const { owner, repo } = parseProjectRepo(projectRepo);
+  return {
+    number: data.iid,
+    url: data.web_url,
+    title: data.title,
+    owner,
+    repo,
+    branch: data.source_branch,
+    baseBranch: data.target_branch,
+    isDraft: data.draft ?? false,
+  };
+}
+
+function extractMergeRequestReference(reference: string): string {
+  const match = /\/merge_requests\/(\d+)(?:[/?#].*)?$/i.exec(reference);
+  return match?.[1] ?? reference;
 }
 
 function mapJobStatus(status: string): CICheck["status"] {
@@ -359,6 +400,12 @@ interface GitLabDiscussion {
   notes: GitLabNote[];
 }
 
+interface GitLabDiffRefs {
+  base_sha: string;
+  start_sha: string;
+  head_sha: string;
+}
+
 function mrApiPath(pr: PRInfo): string {
   return `projects/${encodeProjectId(pr.owner, pr.repo)}/merge_requests/${pr.number}`;
 }
@@ -372,6 +419,70 @@ async function fetchDiscussions(
   return parseJSON<GitLabDiscussion[]>(raw, context);
 }
 
+async function fetchMergeRequestDiffRefs(
+  pr: PRInfo,
+  hostname: string | undefined,
+): Promise<GitLabDiffRefs> {
+  const raw = await glab(["api", mrApiPath(pr)], hostname);
+  const data = parseJSON<{ diff_refs?: Partial<GitLabDiffRefs> }>(
+    raw,
+    `fetch diff refs for MR !${pr.number}`,
+  );
+  const diffRefs = data.diff_refs;
+  if (!diffRefs?.base_sha || !diffRefs.start_sha || !diffRefs.head_sha) {
+    throw new Error(`MR !${pr.number} is missing diff refs`);
+  }
+  return {
+    base_sha: diffRefs.base_sha,
+    start_sha: diffRefs.start_sha,
+    head_sha: diffRefs.head_sha,
+  };
+}
+
+function buildReviewSummaryNote(review: SCMReviewSubmission): string {
+  return ["Workflow Review Outcome", `Outcome: ${review.outcome}`, "", review.summary].join("\n");
+}
+
+async function publishInlineComments(
+  pr: PRInfo,
+  hostname: string | undefined,
+  comments: SCMInlineReviewComment[],
+  diffRefs?: GitLabDiffRefs,
+): Promise<GitLabDiffRefs | undefined> {
+  if (comments.length === 0) return diffRefs;
+
+  const resolvedDiffRefs = diffRefs ?? (await fetchMergeRequestDiffRefs(pr, hostname));
+  for (const comment of comments) {
+    await glab(
+      [
+        "api",
+        "--method",
+        "POST",
+        `${mrApiPath(pr)}/discussions`,
+        "-f",
+        `body=${comment.body}`,
+        "-f",
+        "position[position_type]=text",
+        "-f",
+        `position[base_sha]=${resolvedDiffRefs.base_sha}`,
+        "-f",
+        `position[start_sha]=${resolvedDiffRefs.start_sha}`,
+        "-f",
+        `position[head_sha]=${resolvedDiffRefs.head_sha}`,
+        "-f",
+        `position[old_path]=${comment.path}`,
+        "-f",
+        `position[new_path]=${comment.path}`,
+        "-F",
+        `position[new_line]=${comment.line}`,
+      ],
+      hostname,
+    );
+  }
+
+  return resolvedDiffRefs;
+}
+
 // ---------------------------------------------------------------------------
 // SCM implementation
 // ---------------------------------------------------------------------------
@@ -379,8 +490,11 @@ async function fetchDiscussions(
 function createGitLabSCM(config?: Record<string, unknown>): SCM {
   const configHostname = typeof config?.host === "string" ? config.host : undefined;
 
-  function resolveHostname(pr?: PRInfo): string | undefined {
-    return configHostname ?? (pr ? extractHostFromOwner(pr.owner) : undefined);
+  function resolveHostname(target?: PRInfo | string): string | undefined {
+    if (configHostname) return configHostname;
+    if (!target) return undefined;
+    if (typeof target === "string") return extractHost(target);
+    return extractHostFromOwner(target.owner);
   }
 
   return {
@@ -449,12 +563,7 @@ function createGitLabSCM(config?: Record<string, unknown>): SCM {
     async detectPR(session: Session, project: ProjectConfig): Promise<PRInfo | null> {
       if (!session.branch) return null;
 
-      const parts = project.repo.split("/");
-      if (parts.length < 2 || !parts[0] || !parts[1]) {
-        throw new Error(`Invalid repo format "${project.repo}", expected "owner/repo"`);
-      }
-      const owner = parts.slice(0, -1).join("/");
-      const repo = parts[parts.length - 1];
+      const { owner, repo } = parseProjectRepo(project.repo);
 
       try {
         const raw = await glab(
@@ -486,21 +595,35 @@ function createGitLabSCM(config?: Record<string, unknown>): SCM {
 
         if (mrs.length === 0) return null;
 
-        const mr = mrs[0];
-        return {
-          number: mr.iid,
-          url: mr.web_url,
-          title: mr.title,
-          owner,
-          repo,
-          branch: mr.source_branch,
-          baseBranch: mr.target_branch,
-          isDraft: mr.draft ?? false,
-        };
+        return prInfoFromMergeRequest(
+          {
+            ...mrs[0],
+            iid: mrs[0].iid,
+          },
+          `${owner}/${repo}`,
+        );
       } catch (err) {
         console.warn(`detectPR: failed for branch "${session.branch}": ${(err as Error).message}`);
         return null;
       }
+    },
+
+    async resolvePR(reference: string, project: ProjectConfig): Promise<PRInfo> {
+      const mrReference = extractMergeRequestReference(reference);
+      const { owner, repo } = parseProjectRepo(project.repo);
+      const raw = await glab(
+        ["api", `projects/${encodeProjectId(owner, repo)}/merge_requests/${mrReference}`],
+        resolveHostname(project.repo),
+      );
+      const data = parseJSON<{
+        iid: number;
+        web_url: string;
+        title: string;
+        source_branch: string;
+        target_branch: string;
+        draft?: boolean;
+      }>(raw, `resolvePR for MR !${mrReference}`);
+      return prInfoFromMergeRequest(data, project.repo);
     },
 
     async getPRState(pr: PRInfo): Promise<PRState> {
@@ -727,6 +850,42 @@ function createGitLabSCM(config?: Record<string, unknown>): SCM {
         });
       }
       return comments;
+    },
+
+    async publishReview(pr: PRInfo, review: SCMReviewSubmission): Promise<void> {
+      const hostname = resolveHostname(pr);
+      let diffRefs: GitLabDiffRefs | undefined;
+
+      if (review.comments && review.comments.length > 0) {
+        diffRefs = await publishInlineComments(pr, hostname, review.comments);
+      }
+
+      await glab(
+        [
+          "api",
+          "--method",
+          "POST",
+          `${mrApiPath(pr)}/notes`,
+          "-f",
+          `body=${buildReviewSummaryNote(review)}`,
+        ],
+        hostname,
+      );
+
+      if (review.outcome === "approve") {
+        const approvalDiffRefs = diffRefs ?? (await fetchMergeRequestDiffRefs(pr, hostname));
+        await glab(
+          [
+            "api",
+            "--method",
+            "POST",
+            `${mrApiPath(pr)}/approve`,
+            "-f",
+            `sha=${approvalDiffRefs.head_sha}`,
+          ],
+          hostname,
+        );
+      }
     },
 
     async getMergeability(pr: PRInfo): Promise<MergeReadiness> {
