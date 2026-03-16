@@ -9,7 +9,10 @@ import {
   type AttentionLevel,
   type GlobalPauseState,
   getAttentionLevel,
+  hasActiveOpenPR,
+  hasCompletedPR,
   isPRRateLimited,
+  sessionNeedsReview,
 } from "@/lib/types";
 import { CI_STATUS } from "@composio/ao-core/types";
 import { AttentionZone } from "./AttentionZone";
@@ -52,9 +55,7 @@ export function Dashboard({
   const completedPRs = useMemo(
     () =>
       sessions
-        .filter((session): session is DashboardSession & { pr: DashboardPR } =>
-          Boolean(session.pr && (session.pr.state === "merged" || session.pr.state === "closed")),
-        )
+        .filter(hasCompletedPR)
         .sort((a, b) => Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt)),
     [sessions],
   );
@@ -75,7 +76,7 @@ export function Dashboard({
 
   const openPRs = useMemo(() => {
     return sessions
-      .filter((s): s is DashboardSession & { pr: DashboardPR } => s.pr?.state === "open")
+      .filter(hasActiveOpenPR)
       .map((s) => s.pr)
       .sort((a, b) => mergeScore(a) - mergeScore(b));
   }, [sessions]);
@@ -129,10 +130,8 @@ export function Dashboard({
       totalSessions: sessions.length,
       workingSessions: sessions.filter((s) => s.activity !== null && s.activity !== "exited")
         .length,
-      openPRs: sessions.filter((s) => s.pr?.state === "open").length,
-      needsReview: sessions.filter(
-        (s) => s.pr && !s.pr.isDraft && s.pr.reviewDecision === "pending",
-      ).length,
+      openPRs: sessions.filter(hasActiveOpenPR).length,
+      needsReview: sessions.filter(sessionNeedsReview).length,
     }),
     [sessions],
   );

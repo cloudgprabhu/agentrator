@@ -1,6 +1,11 @@
 "use client";
 
-import { type DashboardPR, isPRRateLimited } from "@/lib/types";
+import {
+  type DashboardPR,
+  type DashboardSession,
+  isPRRateLimited,
+  TERMINAL_STATUSES,
+} from "@/lib/types";
 import { CIBadge } from "./CIBadge";
 
 function getSizeLabel(additions: number, deletions: number): string {
@@ -10,11 +15,14 @@ function getSizeLabel(additions: number, deletions: number): string {
 
 interface PRStatusProps {
   pr: DashboardPR;
+  sessionStatus?: DashboardSession["status"];
 }
 
-export function PRStatus({ pr }: PRStatusProps) {
+export function PRStatus({ pr, sessionStatus }: PRStatusProps) {
   const sizeLabel = getSizeLabel(pr.additions, pr.deletions);
   const rateLimited = isPRRateLimited(pr);
+  const isTerminalSession = sessionStatus ? TERMINAL_STATUSES.has(sessionStatus) : false;
+  const isMerged = pr.state === "merged" || sessionStatus === "merged";
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -37,26 +45,29 @@ export function PRStatus({ pr }: PRStatusProps) {
       )}
 
       {/* Merged badge */}
-      {pr.state === "merged" && (
+      {isMerged && (
         <span className="inline-flex items-center rounded-full bg-[rgba(163,113,247,0.1)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-accent-violet)]">
           merged
         </span>
       )}
 
       {/* Draft badge */}
-      {pr.isDraft && pr.state === "open" && (
+      {!isTerminalSession && pr.isDraft && pr.state === "open" && (
         <span className="inline-flex items-center rounded-full bg-[rgba(125,133,144,0.08)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-text-muted)]">
           draft
         </span>
       )}
 
       {/* CI status — only when we have real data */}
-      {pr.state === "open" && !pr.isDraft && !rateLimited && (
+      {!isTerminalSession && pr.state === "open" && !pr.isDraft && !rateLimited && (
         <CIBadge status={pr.ciStatus} checks={pr.ciChecks} />
       )}
 
       {/* Review decision (only for open PRs with real data) */}
-      {pr.state === "open" && pr.reviewDecision === "approved" && !rateLimited && (
+      {!isTerminalSession &&
+        pr.state === "open" &&
+        pr.reviewDecision === "approved" &&
+        !rateLimited && (
         <span className="inline-flex items-center rounded-full bg-[rgba(63,185,80,0.1)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-accent-green)]">
           approved
         </span>

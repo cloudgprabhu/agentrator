@@ -5,9 +5,8 @@ import {
   type DashboardSession,
   type AttentionLevel,
   getAttentionLevel,
+  isTerminalDashboardSession,
   isPRRateLimited,
-  TERMINAL_STATUSES,
-  TERMINAL_ACTIVITIES,
 } from "@/lib/types";
 import { CI_STATUS } from "@composio/ao-core/types";
 import { cn } from "@/lib/cn";
@@ -54,9 +53,7 @@ export function SessionCard({ session, onSend, onKill, onMerge, onRestore }: Ses
   const rateLimited = pr ? isPRRateLimited(pr) : false;
   const alerts = getAlerts(session);
   const isReadyToMerge = !rateLimited && pr?.mergeability.mergeable && pr.state === "open";
-  const isTerminal =
-    TERMINAL_STATUSES.has(session.status) ||
-    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity));
+  const isTerminal = isTerminalDashboardSession(session);
   const isRestorable = isTerminal && session.status !== "merged";
 
   const title = getSessionTitle(session);
@@ -158,7 +155,7 @@ export function SessionCard({ session, onSend, onKill, onMerge, onRestore }: Ses
         {session.branch && pr && (
           <span className="text-[9px] text-[var(--color-border-strong)]">&middot;</span>
         )}
-        {pr && <PRStatus pr={pr} />}
+        {pr && <PRStatus pr={pr} sessionStatus={session.status} />}
       </div>
 
       {/* Rate limited indicator */}
@@ -408,8 +405,7 @@ interface Alert {
 }
 
 function getAlerts(session: DashboardSession): Alert[] {
-  if (TERMINAL_STATUSES.has(session.status) ||
-      (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))) {
+  if (isTerminalDashboardSession(session)) {
     return [];
   }
   const pr = session.pr;

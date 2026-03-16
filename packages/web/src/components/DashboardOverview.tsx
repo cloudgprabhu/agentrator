@@ -6,9 +6,9 @@ import {
   type DashboardIssue,
   type DashboardSession,
   getAttentionLevel,
+  hasCompletedPR,
+  isTerminalDashboardSession,
   isPRRateLimited,
-  TERMINAL_ACTIVITIES,
-  TERMINAL_STATUSES,
 } from "@/lib/types";
 
 interface DashboardOverviewProps {
@@ -51,10 +51,8 @@ export function DashboardOverview({
   onRestore,
 }: DashboardOverviewProps) {
   const readyToMerge = sessions.filter(isSessionMergeReady).slice(0, 3);
-  const activeSessions = sessions.filter((session) => !isSessionTerminal(session));
-  const completedPRs = sessions.filter(
-    (session) => session.pr?.state === "merged" || session.pr?.state === "closed",
-  );
+  const activeSessions = sessions.filter((session) => !isTerminalDashboardSession(session));
+  const completedPRs = sessions.filter(hasCompletedPR);
 
   return (
     <div className="mb-8 space-y-5">
@@ -212,7 +210,7 @@ export function DashboardOverview({
           <div className="grid gap-3 xl:grid-cols-2">
             {sessions.map((session) => {
               const level = getAttentionLevel(session);
-              const isTerminal = isSessionTerminal(session);
+              const isTerminal = isTerminalDashboardSession(session);
               const pr = session.pr;
               const canMerge = pr ? isSessionMergeReady(session) : false;
               const canRestore = isTerminal && session.status !== "merged";
@@ -397,13 +395,6 @@ function isSessionMergeReady(session: DashboardSession): boolean {
       session.pr.state === "open" &&
       session.pr.mergeability.mergeable &&
       !isPRRateLimited(session.pr),
-  );
-}
-
-function isSessionTerminal(session: DashboardSession): boolean {
-  return (
-    TERMINAL_STATUSES.has(session.status) ||
-    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
   );
 }
 

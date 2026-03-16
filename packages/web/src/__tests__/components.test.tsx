@@ -177,6 +177,14 @@ describe("PRStatus", () => {
     expect(screen.getByText("approved")).toBeInTheDocument();
   });
 
+  it("shows merged badge from session status and suppresses stale review badges", () => {
+    const pr = makePR({ state: "open", reviewDecision: "approved", ciStatus: "passing" });
+    render(<PRStatus pr={pr} sessionStatus="merged" />);
+    expect(screen.getByText("merged")).toBeInTheDocument();
+    expect(screen.queryByText("approved")).not.toBeInTheDocument();
+    expect(screen.queryByText("CI passing")).not.toBeInTheDocument();
+  });
+
   it("does not show CI badge for draft PRs", () => {
     const pr = makePR({ isDraft: true, state: "open", ciStatus: "passing" });
     render(<PRStatus pr={pr} />);
@@ -359,6 +367,45 @@ describe("SessionCard", () => {
     const session = makeSession({ activity: "idle", pr });
     render(<SessionCard session={session} />);
     expect(screen.getByText("needs review")).toBeInTheDocument();
+  });
+
+  it("shows merged and hides stale review state for merged sessions", () => {
+    const pr = makePR({
+      state: "open",
+      ciStatus: "passing",
+      reviewDecision: "pending",
+      mergeability: {
+        mergeable: false,
+        ciPassing: true,
+        approved: false,
+        noConflicts: true,
+        blockers: [],
+      },
+    });
+    const session = makeSession({ status: "merged", activity: "exited", pr });
+    render(<SessionCard session={session} />);
+    expect(screen.getByText("merged")).toBeInTheDocument();
+    expect(screen.queryByText("needs review")).not.toBeInTheDocument();
+    expect(screen.queryByText("CI passing")).not.toBeInTheDocument();
+  });
+
+  it("suppresses stale review badges for other terminal statuses", () => {
+    const pr = makePR({
+      state: "open",
+      ciStatus: "passing",
+      reviewDecision: "approved",
+      mergeability: {
+        mergeable: false,
+        ciPassing: true,
+        approved: true,
+        noConflicts: true,
+        blockers: [],
+      },
+    });
+    const session = makeSession({ status: "errored", activity: "exited", pr });
+    render(<SessionCard session={session} />);
+    expect(screen.queryByText("approved")).not.toBeInTheDocument();
+    expect(screen.queryByText("CI passing")).not.toBeInTheDocument();
   });
 
   it("shows unresolved comments alert with count", () => {
