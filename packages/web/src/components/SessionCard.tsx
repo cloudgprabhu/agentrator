@@ -408,6 +408,10 @@ interface Alert {
 }
 
 function getAlerts(session: DashboardSession): Alert[] {
+  if (TERMINAL_STATUSES.has(session.status) ||
+      (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))) {
+    return [];
+  }
   const pr = session.pr;
   if (!pr || pr.state !== "open") return [];
   if (isPRRateLimited(pr)) return [];
