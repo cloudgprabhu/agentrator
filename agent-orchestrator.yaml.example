@@ -72,6 +72,8 @@ projects:
     path: ~/my-app
     defaultBranch: main
     sessionPrefix: app
+    # Automatically spawn agents for open issues on `ao start`
+    # autoSpawn: true
 
     # Issue tracker (defaults to github issues)
     # tracker:

@@ -20,6 +20,7 @@ const {
   mockExecSilent,
   mockConfigRef,
   mockSessionManager,
+  mockAutoSpawnOpenIssues,
   mockWaitForPortAndOpen,
   mockSpawn,
   mockEnsureLifecycleWorker,
@@ -38,6 +39,7 @@ const {
     send: vi.fn(),
     claimPR: vi.fn(),
   },
+  mockAutoSpawnOpenIssues: vi.fn(),
   mockWaitForPortAndOpen: vi.fn().mockResolvedValue(undefined),
   mockSpawn: vi.fn(),
   mockEnsureLifecycleWorker: vi.fn(),
@@ -87,6 +89,10 @@ vi.mock("@composio/ao-core", async (importOriginal) => {
 
 vi.mock("../../src/lib/create-session-manager.js", () => ({
   getSessionManager: async (): Promise<SessionManager> => mockSessionManager as SessionManager,
+}));
+
+vi.mock("../../src/lib/auto-spawn.js", () => ({
+  autoSpawnOpenIssues: (...args: unknown[]) => mockAutoSpawnOpenIssues(...args),
 }));
 
 vi.mock("../../src/lib/lifecycle-service.js", () => ({
@@ -164,6 +170,13 @@ beforeEach(() => {
   mockExecSilent.mockResolvedValue(null);
   mockWaitForPortAndOpen.mockReset();
   mockWaitForPortAndOpen.mockResolvedValue(undefined);
+  mockAutoSpawnOpenIssues.mockReset();
+  mockAutoSpawnOpenIssues.mockResolvedValue({
+    openIssues: [],
+    created: [],
+    skipped: [],
+    failed: [],
+  });
   mockEnsureLifecycleWorker.mockReset();
   mockEnsureLifecycleWorker.mockResolvedValue({
     running: true,
@@ -323,6 +336,72 @@ describe("start command — project resolution", () => {
       .mock.calls.map((c) => c.join(" "))
       .join("\n");
     expect(errors).toContain("No projects configured");
+  });
+});
+
+describe("start command — auto spawn", () => {
+  it("auto-spawns when the project config enables it", async () => {
+    mockConfigRef.current = makeConfig({
+      "my-app": makeProject({ autoSpawn: true }),
+    });
+
+    await program.parseAsync(["node", "test", "start", "--no-dashboard", "--no-orchestrator"]);
+
+    expect(mockEnsureLifecycleWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ configPath: expect.any(String) }),
+      "my-app",
+    );
+    expect(mockAutoSpawnOpenIssues).toHaveBeenCalledWith(
+      expect.objectContaining({ configPath: expect.any(String) }),
+      "my-app",
+    );
+    expect(mockEnsureLifecycleWorker.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAutoSpawnOpenIssues.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("auto-spawns when --auto-spawn is passed", async () => {
+    mockConfigRef.current = makeConfig({
+      "my-app": makeProject({ autoSpawn: false }),
+    });
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "start",
+      "--auto-spawn",
+      "--no-dashboard",
+      "--no-orchestrator",
+    ]);
+
+    expect(mockAutoSpawnOpenIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-spawn when config is unset and no flag is passed", async () => {
+    mockConfigRef.current = makeConfig({
+      "my-app": makeProject(),
+    });
+
+    await program.parseAsync(["node", "test", "start", "--no-dashboard", "--no-orchestrator"]);
+
+    expect(mockAutoSpawnOpenIssues).not.toHaveBeenCalled();
+  });
+
+  it("disables auto-spawn with --no-auto-spawn even when config enables it", async () => {
+    mockConfigRef.current = makeConfig({
+      "my-app": makeProject({ autoSpawn: true }),
+    });
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "start",
+      "--no-auto-spawn",
+      "--no-dashboard",
+      "--no-orchestrator",
+    ]);
+
+    expect(mockAutoSpawnOpenIssues).not.toHaveBeenCalled();
   });
 });
 

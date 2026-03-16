@@ -29,6 +29,7 @@ import {
   type ProjectConfig,
   type ParsedRepoUrl,
 } from "@composio/ao-core";
+import { autoSpawnOpenIssues } from "../lib/auto-spawn.js";
 import { exec, execSilent } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker, stopLifecycleWorker } from "../lib/lifecycle-service.js";
@@ -259,10 +260,17 @@ async function runStartup(
   config: OrchestratorConfig,
   projectId: string,
   project: ProjectConfig,
-  opts?: { dashboard?: boolean; orchestrator?: boolean; rebuild?: boolean; autoPort?: boolean },
+  opts?: {
+    dashboard?: boolean;
+    orchestrator?: boolean;
+    rebuild?: boolean;
+    autoPort?: boolean;
+    autoSpawn?: boolean;
+  },
 ): Promise<void> {
   const sessionId = `${project.sessionPrefix}-orchestrator`;
-  const shouldStartLifecycle = opts?.dashboard !== false || opts?.orchestrator !== false;
+  const shouldStartLifecycle =
+    opts?.dashboard !== false || opts?.orchestrator !== false || opts?.autoSpawn === true;
   let lifecycleStatus: Awaited<ReturnType<typeof ensureLifecycleWorker>> | null = null;
   let port = config.port ?? DEFAULT_PORT;
   const orchestratorSessionStrategy = normalizeOrchestratorSessionStrategy(
@@ -330,6 +338,25 @@ async function runStartup(
       }
       throw new Error(
         `Failed to start lifecycle worker: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+
+  if (opts?.autoSpawn) {
+    try {
+      spinner.start("Auto-spawning open issues");
+      const autoSpawnSummary = await autoSpawnOpenIssues(config, projectId);
+      spinner.succeed(
+        `Auto-spawn complete (${autoSpawnSummary.created.length} spawned, ${autoSpawnSummary.skipped.length} skipped${autoSpawnSummary.failed.length > 0 ? `, ${autoSpawnSummary.failed.length} failed` : ""})`,
+      );
+    } catch (err) {
+      spinner.fail("Auto-spawn failed");
+      if (dashboardProcess) {
+        dashboardProcess.kill();
+      }
+      throw new Error(
+        `Failed to auto-spawn open issues: ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
     }
@@ -444,6 +471,8 @@ export function registerStart(program: Command): void {
     .description(
       "Start orchestrator agent and dashboard for a project (or pass a repo URL to onboard)",
     )
+    .option("--auto-spawn", "Spawn agents for open tracker issues after startup")
+    .option("--no-auto-spawn", "Disable startup auto-spawn even if the project enables it")
     .option("--no-dashboard", "Skip starting the dashboard server")
     .option("--no-orchestrator", "Skip starting the orchestrator agent")
     .option("--rebuild", "Clean and rebuild dashboard before starting")
@@ -451,10 +480,12 @@ export function registerStart(program: Command): void {
       async (
         projectArg?: string,
         opts?: {
+          autoSpawn?: boolean;
           dashboard?: boolean;
           orchestrator?: boolean;
           rebuild?: boolean;
         },
+        command?: Command,
       ) => {
         try {
           let config: OrchestratorConfig;
@@ -475,7 +506,16 @@ export function registerStart(program: Command): void {
             ({ projectId, project } = resolveProject(config, projectArg));
           }
 
-          await runStartup(config, projectId, project, { ...opts, autoPort });
+          const autoSpawnEnabled =
+            command?.getOptionValueSource("autoSpawn") === "cli"
+              ? opts?.autoSpawn === true
+              : project.autoSpawn === true;
+
+          await runStartup(config, projectId, project, {
+            ...opts,
+            autoPort,
+            autoSpawn: autoSpawnEnabled,
+          });
         } catch (err) {
           if (err instanceof Error) {
             if (err.message.includes("No agent-orchestrator.yaml found")) {

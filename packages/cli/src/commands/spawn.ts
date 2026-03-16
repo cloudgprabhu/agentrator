@@ -7,11 +7,11 @@ import {
   getLeaves,
   getSiblings,
   formatPlanTree,
-  TERMINAL_STATUSES,
   type OrchestratorConfig,
   type DecomposerConfig,
   DEFAULT_DECOMPOSER_CONFIG,
 } from "@composio/ao-core";
+import { spawnIssuesWithDedup } from "../lib/auto-spawn.js";
 import { exec } from "../lib/shell.js";
 import { banner } from "../lib/format.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
@@ -324,61 +324,14 @@ export function registerBatchSpawn(program: Command): void {
       }
 
       const sm = await getSessionManager(config);
-      const created: Array<{ session: string; issue: string }> = [];
-      const skipped: Array<{ issue: string; existing: string }> = [];
-      const failed: Array<{ issue: string; error: string }> = [];
-      const spawnedIssues = new Set<string>();
-
-      // Load existing sessions once before the loop to avoid repeated reads + enrichment.
-      // Exclude terminal sessions so completed/merged sessions don't block respawning
-      // (e.g. when an issue is reopened after its PR was merged).
-      const existingSessions = await sm.list(projectId);
-      const existingIssueMap = new Map(
-        existingSessions
-          .filter((s) => s.issueId && !TERMINAL_STATUSES.has(s.status))
-          .map((s) => [s.issueId!.toLowerCase(), s.id]),
-      );
-
-      for (const issue of issues) {
-        // Duplicate detection — check both existing sessions and same-run duplicates
-        if (spawnedIssues.has(issue.toLowerCase())) {
-          console.log(chalk.yellow(`  Skip ${issue} — duplicate in this batch`));
-          skipped.push({ issue, existing: "(this batch)" });
-          continue;
-        }
-
-        // Check existing sessions (pre-loaded before loop)
-        const existingSessionId = existingIssueMap.get(issue.toLowerCase());
-        if (existingSessionId) {
-          console.log(chalk.yellow(`  Skip ${issue} — already has session ${existingSessionId}`));
-          skipped.push({ issue, existing: existingSessionId });
-          continue;
-        }
-
-        try {
-          const session = await sm.spawn({ projectId, issueId: issue });
-          created.push({ session: session.id, issue });
-          spawnedIssues.add(issue.toLowerCase());
-          console.log(chalk.green(`  Created ${session.id} for ${issue}`));
-
-          if (opts.open) {
-            try {
-              const tmuxTarget = session.runtimeHandle?.id ?? session.id;
-              await exec("open-iterm-tab", [tmuxTarget]);
-            } catch {
-              // best effort
-            }
-          }
-        } catch (err) {
-          failed.push({
-            issue,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          console.log(
-            chalk.red(`  Failed ${issue} — ${err instanceof Error ? err.message : String(err)}`),
-          );
-        }
-      }
+      const { created, skipped, failed } = await spawnIssuesWithDedup({
+        config,
+        projectId,
+        issues,
+        openTabs: opts.open,
+        verbose: true,
+        sessionManager: sm,
+      });
 
       console.log();
       if (created.length > 0) {
