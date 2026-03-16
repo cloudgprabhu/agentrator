@@ -98,6 +98,7 @@ Record reviewer outcomes with:
 ```bash
 ao workflow review-outcome my-app #101 --outcome approve --summary "Looks good to merge."
 ao workflow review-outcome my-app https://github.com/acme/my-app/pull/88 --outcome request_changes --summary "Add regression coverage for the auth fallback path."
+ao workflow review-outcome my-app https://github.com/acme/my-app/pull/88 --outcome request_changes --summary "Guard the auth fallback path." --comment "packages/core/src/auth.ts:84:Handle the null provider case before dereferencing."
 ao workflow review-outcome my-app #101 --outcome create_follow_up --summary "Document the rollout steps for operators." --follow-up-title "Add rollout docs"
 ao workflow review-outcome my-app #101 --outcome update_parent_summary --summary "Core implementation is ready; rollout docs remain."
 ```
@@ -105,7 +106,7 @@ ao workflow review-outcome my-app #101 --outcome update_parent_summary --summary
 That command:
 
 - resolves the workflow child issue through issue refs or PR refs
-- publishes a first-class PR review when the linked SCM supports it, otherwise falls back to the relevant tracker issue surface
+- publishes a first-class PR/MR review when the linked SCM supports it, including optional inline file comments from repeated `--comment path:line:body` flags, otherwise falls back to the relevant tracker issue surface
 - updates lineage state to `approved`, `changes_requested`, or `blocked` when applicable
 - routes `request_changes` back to the configured `childIssueRole` by sending the active implementer session a message or spawning a new implementer session
 - appends a new child task plus tracker issue when the reviewer selects `create_follow_up`

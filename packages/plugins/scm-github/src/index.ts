@@ -26,7 +26,7 @@ import {
   type AutomatedComment,
   type MergeReadiness,
 } from "@composio/ao-core";
-import type { SCM, SCMReviewSubmission } from "@composio/ao-core/types";
+import type { SCM, SCMInlineReviewComment, SCMReviewSubmission } from "@composio/ao-core/types";
 import {
   getWebhookHeader,
   parseWebhookBranchRef,
@@ -119,6 +119,51 @@ function prInfoFromView(
 function isUnsupportedPrChecksJsonError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return /pr checks/i.test(err.message) && /unknown json field/i.test(err.message);
+}
+
+async function getHeadCommitSha(pr: PRInfo): Promise<string> {
+  const raw = await gh([
+    "pr",
+    "view",
+    String(pr.number),
+    "--repo",
+    repoFlag(pr),
+    "--json",
+    "headRefOid",
+  ]);
+
+  const data: { headRefOid?: string } = JSON.parse(raw);
+  if (!data.headRefOid) {
+    throw new Error(`Missing headRefOid for PR #${pr.number}`);
+  }
+  return data.headRefOid;
+}
+
+async function publishInlineComments(
+  pr: PRInfo,
+  comments: SCMInlineReviewComment[],
+): Promise<void> {
+  if (comments.length === 0) return;
+
+  const commitId = await getHeadCommitSha(pr);
+  for (const comment of comments) {
+    await gh([
+      "api",
+      `repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/comments`,
+      "--method",
+      "POST",
+      "-f",
+      `body=${comment.body}`,
+      "-f",
+      `commit_id=${commitId}`,
+      "-f",
+      `path=${comment.path}`,
+      "-F",
+      `line=${comment.line}`,
+      "-f",
+      "side=RIGHT",
+    ]);
+  }
 }
 
 function mapRawCheckStateToStatus(rawState: string | undefined): CICheck["status"] {
@@ -953,6 +998,8 @@ function createGitHubSCM(): SCM {
     },
 
     async publishReview(pr: PRInfo, review: SCMReviewSubmission): Promise<void> {
+      await publishInlineComments(pr, review.comments ?? []);
+
       const outcomeFlag =
         review.outcome === "approve"
           ? "--approve"

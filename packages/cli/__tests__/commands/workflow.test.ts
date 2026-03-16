@@ -1424,6 +1424,8 @@ describe("workflow command", () => {
       "approve",
       "--summary",
       "Acceptance criteria satisfied and the change is ready to close.",
+      "--comment",
+      "src/config.ts:18:Keep the validation branch explicit in the follow-up cleanup.",
     ]);
 
     expect(mockTracker.updateIssue).toHaveBeenCalledWith(
@@ -1432,6 +1434,15 @@ describe("workflow command", () => {
         comment: expect.stringContaining("Outcome: approve"),
       }),
       expect.objectContaining({ tracker: { plugin: "github" } }),
+    );
+    expect(mockTracker.updateIssue).toHaveBeenCalledWith(
+      "101",
+      expect.objectContaining({
+        comment: expect.stringContaining(
+          "src/config.ts:18: Keep the validation branch explicit in the follow-up cleanup.",
+        ),
+      }),
+      expect.anything(),
     );
     expect(readTaskLineageFile(lineagePath).childIssues[0]?.state).toBe("approved");
   });
@@ -1500,6 +1511,8 @@ describe("workflow command", () => {
       "approve",
       "--summary",
       "Acceptance criteria satisfied and the PR is ready to merge.",
+      "--comment",
+      "src/workflow.ts:42:Tighten the guard before resolving the PR reference.",
     ]);
 
     expect(mockSCM.publishReview).toHaveBeenCalledWith(
@@ -1510,6 +1523,13 @@ describe("workflow command", () => {
       {
         outcome: "approve",
         summary: "Acceptance criteria satisfied and the PR is ready to merge.",
+        comments: [
+          {
+            path: "src/workflow.ts",
+            line: 42,
+            body: "Tighten the guard before resolving the PR reference.",
+          },
+        ],
       },
     );
     expect(mockSCM.resolvePR).toHaveBeenCalledWith(
@@ -1601,6 +1621,8 @@ describe("workflow command", () => {
       "request_changes",
       "--summary",
       "Add regression coverage for the empty-config case.",
+      "--comment",
+      "src/config.ts:27:Exercise the empty-config branch in the new test.",
     ]);
 
     expect(mockSCM.publishReview).toHaveBeenCalledWith(
@@ -1611,12 +1633,21 @@ describe("workflow command", () => {
       {
         outcome: "request_changes",
         summary: "Add regression coverage for the empty-config case.",
+        comments: [
+          {
+            path: "src/config.ts",
+            line: 27,
+            body: "Exercise the empty-config branch in the new test.",
+          },
+        ],
       },
     );
     expect(mockTracker.updateIssue).not.toHaveBeenCalled();
     expect(mockSessionManager.send).toHaveBeenCalledWith(
       "impl-101",
-      expect.stringContaining("Requested Changes"),
+      expect.stringContaining(
+        "src/config.ts:27: Exercise the empty-config branch in the new test.",
+      ),
     );
     expect(mockSessionManager.spawn).not.toHaveBeenCalled();
     expect(readTaskLineageFile(lineagePath).childIssues[0]?.state).toBe("changes_requested");

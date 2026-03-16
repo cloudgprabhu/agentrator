@@ -5,6 +5,7 @@ import {
   type CreateIssueInput,
   type OrchestratorConfig,
   type ProjectConfig,
+  type SCMInlineReviewComment,
   type SCM,
   type Session,
   type TaskLineage,
@@ -47,6 +48,20 @@ interface WorkflowContext {
 interface PluginContext extends WorkflowContext {
   tracker: Tracker | null;
   scm: SCM | null;
+}
+
+interface ReviewOutcomeOptions {
+  outcome: ReviewOutcome;
+  summary: string;
+  followUpTitle?: string;
+  comments: SCMInlineReviewComment[];
+}
+
+interface ReviewOutcomeCommandOptions {
+  outcome: ReviewOutcome;
+  summary: string;
+  followUpTitle?: string;
+  comment?: SCMInlineReviewComment[];
 }
 
 function exitWithError(message: string): never {
@@ -332,13 +347,64 @@ function buildReviewPrompt(
   return lines.join("\n");
 }
 
-function buildRequestedChangesPrompt(summary: string): string {
+function parseInlineReviewCommentSpec(spec: string): SCMInlineReviewComment {
+  const firstColon = spec.indexOf(":");
+  const secondColon = firstColon === -1 ? -1 : spec.indexOf(":", firstColon + 1);
+  if (firstColon <= 0 || secondColon <= firstColon + 1 || secondColon === spec.length - 1) {
+    exitWithError(`Invalid --comment value "${spec}". Expected path:line:body`);
+  }
+
+  const path = spec.slice(0, firstColon).trim();
+  const lineText = spec.slice(firstColon + 1, secondColon).trim();
+  const body = spec.slice(secondColon + 1).trim();
+  const line = Number(lineText);
+  if (!path || !body || !Number.isInteger(line) || line < 1) {
+    exitWithError(`Invalid --comment value "${spec}". Expected path:line:body`);
+  }
+
+  return { path, line, body };
+}
+
+function collectInlineReviewComment(
+  value: string,
+  existing: SCMInlineReviewComment[] = [],
+): SCMInlineReviewComment[] {
+  existing.push(parseInlineReviewCommentSpec(value));
+  return existing;
+}
+
+function formatInlineReviewComments(comments: SCMInlineReviewComment[]): string[] {
+  if (comments.length === 0) return [];
   return [
-    "## Requested Changes",
-    summary,
-    "",
-    "Please address the requested review changes and update the existing work.",
-  ].join("\n");
+    "## File Comments",
+    ...comments.map((comment) => `- ${comment.path}:${comment.line}: ${comment.body}`),
+  ];
+}
+
+function buildRequestedChangesPrompt(
+  summary: string,
+  comments: SCMInlineReviewComment[] = [],
+): string {
+  const lines = ["## Requested Changes", summary];
+  const fileComments = formatInlineReviewComments(comments);
+  if (fileComments.length > 0) {
+    lines.push("", ...fileComments);
+  }
+  lines.push("", "Please address the requested review changes and update the existing work.");
+  return lines.join("\n");
+}
+
+function buildWorkflowReviewOutcomeComment(
+  outcome: Exclude<ReviewOutcome, "create_follow_up" | "update_parent_summary">,
+  summary: string,
+  comments: SCMInlineReviewComment[],
+): string {
+  const lines = ["Workflow Review Outcome", `Outcome: ${outcome}`, "", summary];
+  const fileComments = formatInlineReviewComments(comments);
+  if (fileComments.length > 0) {
+    lines.push("", ...fileComments);
+  }
+  return lines.join("\n");
 }
 
 function isTerminalSession(session: Session): boolean {
@@ -708,10 +774,11 @@ async function publishOutcomeToSCMOrTracker(
   child: TaskLineageChildIssue,
   outcome: Exclude<ReviewOutcome, "create_follow_up" | "update_parent_summary">,
   summary: string,
+  comments: SCMInlineReviewComment[] = [],
 ): Promise<void> {
   if (child.pr?.url && context.scm?.publishReview && context.scm.resolvePR) {
     const pr = await context.scm.resolvePR(child.pr.url, context.project);
-    await context.scm.publishReview(pr, { outcome, summary });
+    await context.scm.publishReview(pr, { outcome, summary, comments });
     return;
   }
 
@@ -720,7 +787,7 @@ async function publishOutcomeToSCMOrTracker(
   }
   await context.tracker.updateIssue(
     child.issueId,
-    { comment: `Workflow Review Outcome\nOutcome: ${outcome}\n\n${summary}` },
+    { comment: buildWorkflowReviewOutcomeComment(outcome, summary, comments) },
     context.project,
   );
 }
@@ -728,7 +795,7 @@ async function publishOutcomeToSCMOrTracker(
 async function handleReviewOutcome(
   projectId: string,
   reference: string,
-  opts: { outcome: ReviewOutcome; summary: string; followUpTitle?: string },
+  opts: ReviewOutcomeOptions,
 ): Promise<void> {
   const { context, match, taskPlan, taskPlanPath } = await resolveReviewMatch(projectId, reference);
   const child = match.lineage.childIssues[match.childIndex];
@@ -741,6 +808,7 @@ async function handleReviewOutcome(
       child,
       "approve",
       opts.summary,
+      opts.comments,
     );
     transitionTaskLineageChildState(project.path, child.issueLabel, "approved");
     return;
@@ -752,6 +820,7 @@ async function handleReviewOutcome(
       child,
       "request_changes",
       opts.summary,
+      opts.comments,
     );
     transitionTaskLineageChildState(project.path, child.issueLabel, "changes_requested");
 
@@ -762,7 +831,7 @@ async function handleReviewOutcome(
         session.metadata["role"] === workflow.childIssueRole &&
         !isTerminalSession(session),
     );
-    const prompt = buildRequestedChangesPrompt(opts.summary);
+    const prompt = buildRequestedChangesPrompt(opts.summary, opts.comments);
     if (activeImplementer) {
       await sessionManager.send(activeImplementer.id, prompt);
     } else {
@@ -987,14 +1056,22 @@ export function registerWorkflow(program: Command): void {
       "approve | request_changes | create_follow_up | update_parent_summary",
     )
     .requiredOption("--summary <summary>", "Structured summary of the review decision")
+    .option(
+      "--comment <path:line:body>",
+      "Inline PR/MR comment to publish with the review outcome; repeat for multiple comments",
+      collectInlineReviewComment,
+      [],
+    )
     .option("--follow-up-title <title>", "Title for the created follow-up issue")
     .action(
       withCommandErrors(
-        async (
-          projectId: string,
-          reference: string,
-          opts: { outcome: ReviewOutcome; summary: string; followUpTitle?: string },
-        ) => handleReviewOutcome(projectId, reference, opts),
+        async (projectId: string, reference: string, opts: ReviewOutcomeCommandOptions) =>
+          handleReviewOutcome(projectId, reference, {
+            outcome: opts.outcome,
+            summary: opts.summary,
+            followUpTitle: opts.followUpTitle,
+            comments: opts.comment ?? [],
+          }),
       ),
     );
 
