@@ -59,7 +59,7 @@ That command:
 - copies labels from the plan into tracker issue creation
 - writes parent/spec/ADR/dependencies into the issue body
 - records created issue IDs and URLs in `docs/plans/int-123.lineage.yaml` by default
-- uses native parent/child issue linkage when the tracker supports it; the current implementation does this for Linear while GitHub and GitLab continue using lineage plus issue-body linkage
+- uses native parent/child issue linkage when the tracker supports it; the current implementation does this for Linear and GitHub while GitLab continues using lineage plus issue-body linkage
 
 Start implementation sessions for eligible child issues with:
 
