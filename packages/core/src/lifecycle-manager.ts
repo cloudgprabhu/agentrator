@@ -363,7 +363,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // 3. Auto-detect PR by branch if metadata.pr is missing.
     //    This is critical for agents without auto-hook systems (Codex, Aider,
     //    OpenCode) that can't reliably write pr=<url> to metadata on their own.
-    if (!session.pr && scm && session.branch && session.metadata["prAutoDetect"] !== "off") {
+    if (
+      !session.pr &&
+      scm &&
+      (session.branch || session.issueId) &&
+      session.metadata["prAutoDetect"] !== "off"
+    ) {
       try {
         const detectedPR = await scm.detectPR(session, project);
         if (detectedPR) {
@@ -372,7 +377,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // Don't write status here — step 4 below will determine the
           // correct status (merged, ci_failed, etc.) on this same cycle.
           const sessionsDir = getSessionsDir(config.configPath, session.projectId);
-          updateMetadata(sessionsDir, session.id, { pr: detectedPR.url });
+          const metadataUpdate: Record<string, string> = { pr: detectedPR.url };
+          // If the PR was found on a different branch (via issue-id fallback),
+          // update the stored branch so future polls use the exact branch name.
+          if (detectedPR.branch && detectedPR.branch !== session.branch) {
+            session.branch = detectedPR.branch;
+            metadataUpdate.branch = detectedPR.branch;
+          }
+          updateMetadata(sessionsDir, session.id, metadataUpdate);
         }
       } catch {
         // SCM detection failed — will retry next poll

@@ -510,37 +510,73 @@ function createGitHubSCM(): SCM {
     },
 
     async detectPR(session: Session, project: ProjectConfig): Promise<PRInfo | null> {
-      if (!session.branch) return null;
+      if (!session.branch && !session.issueId) return null;
       parseProjectRepo(project.repo);
-      try {
-        const raw = await gh([
-          "pr",
-          "list",
-          "--repo",
-          project.repo,
-          "--head",
-          session.branch,
-          "--json",
-          "number,url,title,headRefName,baseRefName,isDraft",
-          "--limit",
-          "1",
-        ]);
 
-        const prs: Array<{
-          number: number;
-          url: string;
-          title: string;
-          headRefName: string;
-          baseRefName: string;
-          isDraft: boolean;
-        }> = JSON.parse(raw);
+      // 1. Try exact branch match (primary path)
+      if (session.branch) {
+        try {
+          const raw = await gh([
+            "pr",
+            "list",
+            "--repo",
+            project.repo,
+            "--head",
+            session.branch,
+            "--json",
+            "number,url,title,headRefName,baseRefName,isDraft",
+            "--limit",
+            "1",
+          ]);
 
-        if (prs.length === 0) return null;
+          const prs: Array<{
+            number: number;
+            url: string;
+            title: string;
+            headRefName: string;
+            baseRefName: string;
+            isDraft: boolean;
+          }> = JSON.parse(raw);
 
-        return prInfoFromView(prs[0], project.repo);
-      } catch {
-        return null;
+          if (prs.length > 0) return prInfoFromView(prs[0], project.repo);
+        } catch {
+          // fall through to issue-id fallback
+        }
       }
+
+      // 2. Fallback: search open PRs whose head branch contains the issue ID.
+      //    Handles agents (Codex, Aider, etc.) that push to a different branch
+      //    than the one recorded in session metadata (e.g. feat/22 vs feat/issue-22).
+      if (session.issueId) {
+        try {
+          const raw = await gh([
+            "pr",
+            "list",
+            "--repo",
+            project.repo,
+            "--json",
+            "number,url,title,headRefName,baseRefName,isDraft",
+            "--limit",
+            "50",
+          ]);
+
+          const allPrs: Array<{
+            number: number;
+            url: string;
+            title: string;
+            headRefName: string;
+            baseRefName: string;
+            isDraft: boolean;
+          }> = JSON.parse(raw);
+
+          const match = allPrs.find((pr) => pr.headRefName.includes(session.issueId!));
+          if (match) return prInfoFromView(match, project.repo);
+        } catch {
+          return null;
+        }
+      }
+
+      return null;
     },
 
     async resolvePR(reference: string, project: ProjectConfig): Promise<PRInfo> {
