@@ -122,6 +122,7 @@ projects:
     path: ~/my-app
     defaultBranch: main
     sessionPrefix: app
+    autoSpawn: true # spawn open tracker issues automatically on `ao start`
 
 reactions:
   ci-failed:
@@ -176,6 +177,9 @@ ao session kill <session>              # Kill a session
 ao session restore <session>           # Revive a crashed agent
 ao dashboard                           # Open web dashboard
 ```
+
+Project configs can opt into startup issue spawning with `autoSpawn: true`, and you can override
+it per run with `ao start <project> --auto-spawn` or `ao start <project> --no-auto-spawn`.
 
 When both `--role` and `--agent` are provided, `--agent` takes precedence for agent plugin
 selection, while provider/auth/model/runtime settings still resolve from the selected role.

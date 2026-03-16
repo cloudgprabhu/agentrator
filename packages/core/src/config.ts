@@ -241,6 +241,7 @@ const ProjectConfigSchema = z.object({
   agentRules: z.string().optional(),
   agentRulesFile: z.string().optional(),
   orchestratorRules: z.string().optional(),
+  autoSpawn: z.boolean().optional(),
   workflow: z.string().optional(),
   orchestratorSessionStrategy: z
     .enum(["reuse", "delete", "ignore", "delete-new", "ignore-new", "kill-previous"])

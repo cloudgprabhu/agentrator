@@ -635,6 +635,22 @@ describe("Config Defaults", () => {
     expect(validated.projects.proj1.tracker).toEqual({ plugin: "github" });
   });
 
+  it("accepts project autoSpawn configuration", () => {
+    const config = {
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+          autoSpawn: true,
+        },
+      },
+    };
+
+    const validated = validateConfig(config);
+    expect(validated.projects.proj1.autoSpawn).toBe(true);
+  });
+
   it("infers GitLab tracker default from scm plugin", () => {
     const config = {
       projects: {

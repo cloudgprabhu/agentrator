@@ -993,6 +993,9 @@ export interface ProjectConfig {
   /** Rules for the orchestrator agent (stored, reserved for future use) */
   orchestratorRules?: string;
 
+  /** Auto-spawn agents for open tracker issues when `ao start` runs */
+  autoSpawn?: boolean;
+
   orchestratorSessionStrategy?:
     | "reuse"
     | "delete"
