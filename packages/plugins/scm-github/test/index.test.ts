@@ -417,6 +417,68 @@ describe("scm-github plugin", () => {
       expect(result).toBeNull();
     });
 
+    it("falls back to issue references in open PR title/body", async () => {
+      mockGh([]);
+      mockGh([
+        {
+          number: 24,
+          url: "https://github.com/acme/repo/pull/24",
+          title: "fix: handle session PR detection",
+          body: "Fixes #24",
+          headRefName: "feat/24",
+          baseRefName: "main",
+          isDraft: false,
+        },
+      ]);
+
+      const result = await scm.detectPR(
+        makeSession({ branch: "feat/issue-24", issueId: "24" }),
+        project,
+      );
+
+      expect(result).toEqual({
+        number: 24,
+        url: "https://github.com/acme/repo/pull/24",
+        title: "fix: handle session PR detection",
+        owner: "acme",
+        repo: "repo",
+        branch: "feat/24",
+        baseBranch: "main",
+        isDraft: false,
+      });
+    });
+
+    it("falls back to open PR head branch containing the issue ID", async () => {
+      mockGh([]);
+      mockGh([
+        {
+          number: 24,
+          url: "https://github.com/acme/repo/pull/24",
+          title: "fix: handle session PR detection",
+          body: "No explicit issue reference here",
+          headRefName: "feat/24",
+          baseRefName: "main",
+          isDraft: false,
+        },
+      ]);
+
+      const result = await scm.detectPR(
+        makeSession({ branch: "feat/issue-24", issueId: "24" }),
+        project,
+      );
+
+      expect(result).toEqual({
+        number: 24,
+        url: "https://github.com/acme/repo/pull/24",
+        title: "fix: handle session PR detection",
+        owner: "acme",
+        repo: "repo",
+        branch: "feat/24",
+        baseBranch: "main",
+        isDraft: false,
+      });
+    });
+
     it("returns null when session has no branch", async () => {
       const result = await scm.detectPR(makeSession({ branch: null }), project);
       expect(result).toBeNull();

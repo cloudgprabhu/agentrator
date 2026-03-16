@@ -507,6 +507,60 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("working");
   });
 
+  it("updates session branch metadata when auto-detected PR uses a different branch", async () => {
+    const detectedPR = makePR({ branch: "feat/24" });
+    const mockSCM: SCM = {
+      name: "mock-scm",
+      detectPR: vi.fn().mockResolvedValue(detectedPR),
+      getPRState: vi.fn().mockResolvedValue("open"),
+      mergePR: vi.fn(),
+      closePR: vi.fn(),
+      getCIChecks: vi.fn(),
+      getCISummary: vi.fn().mockResolvedValue("passing"),
+      getReviews: vi.fn(),
+      getReviewDecision: vi.fn().mockResolvedValue("none"),
+      getPendingComments: vi.fn(),
+      getAutomatedComments: vi.fn(),
+      getMergeability: vi.fn(),
+    };
+
+    const registryWithSCM: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockAgent;
+        if (slot === "scm") return mockSCM;
+        return null;
+      }),
+    };
+
+    const session = makeSession({ status: "working", branch: "feat/issue-24", issueId: "24" });
+    vi.mocked(mockSessionManager.get).mockResolvedValue(session);
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: "feat/issue-24",
+      status: "working",
+      project: "my-app",
+      issue: "24",
+    });
+
+    const lm = createLifecycleManager({
+      config,
+      registry: registryWithSCM,
+      sessionManager: mockSessionManager,
+    });
+
+    await lm.check("app-1");
+
+    expect(session.pr).toEqual(detectedPR);
+    expect(session.branch).toBe("feat/24");
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta?.["pr"]).toBe("https://github.com/org/repo/pull/42");
+    expect(meta?.["branch"]).toBe("feat/24");
+    expect(lm.getStates().get("app-1")).toBe("pr_open");
+  });
+
   it("detects merged PR", async () => {
     const mockSCM: SCM = {
       name: "mock-scm",
