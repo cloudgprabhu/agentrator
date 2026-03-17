@@ -26,7 +26,7 @@ import {
   type AutomatedComment,
   type MergeReadiness,
 } from "@composio/ao-core";
-import type { SCM, SCMReviewSubmission } from "@composio/ao-core/types";
+import type { SCM, SCMInlineReviewComment, SCMReviewSubmission } from "@composio/ao-core/types";
 import {
   getWebhookHeader,
   parseWebhookBranchRef,
@@ -172,6 +172,51 @@ function prInfoFromView(
 function isUnsupportedPrChecksJsonError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return /pr checks/i.test(err.message) && /unknown json field/i.test(err.message);
+}
+
+async function getHeadCommitSha(pr: PRInfo): Promise<string> {
+  const raw = await gh([
+    "pr",
+    "view",
+    String(pr.number),
+    "--repo",
+    repoFlag(pr),
+    "--json",
+    "headRefOid",
+  ]);
+
+  const data: { headRefOid?: string } = JSON.parse(raw);
+  if (!data.headRefOid) {
+    throw new Error(`Missing headRefOid for PR #${pr.number}`);
+  }
+  return data.headRefOid;
+}
+
+async function publishInlineComments(
+  pr: PRInfo,
+  comments: SCMInlineReviewComment[],
+): Promise<void> {
+  if (comments.length === 0) return;
+
+  const commitId = await getHeadCommitSha(pr);
+  for (const comment of comments) {
+    await gh([
+      "api",
+      `repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/comments`,
+      "--method",
+      "POST",
+      "-f",
+      `body=${comment.body}`,
+      "-f",
+      `commit_id=${commitId}`,
+      "-f",
+      `path=${comment.path}`,
+      "-F",
+      `line=${comment.line}`,
+      "-f",
+      "side=RIGHT",
+    ]);
+  }
 }
 
 function mapRawCheckStateToStatus(rawState: string | undefined): CICheck["status"] {
@@ -569,24 +614,61 @@ function createGitHubSCM(): SCM {
       // 1. Try exact branch match (primary path)
       if (session.branch) {
         try {
-          const byBranch = await searchPRByBranch(session.branch, project.repo);
-          if (byBranch) return byBranch;
+          const raw = await gh([
+            "pr",
+            "list",
+            "--repo",
+            project.repo,
+            "--head",
+            session.branch,
+            "--json",
+            "number,url,title,headRefName,baseRefName,isDraft",
+            "--limit",
+            "1",
+          ]);
+
+          const prs: Array<{
+            number: number;
+            url: string;
+            title: string;
+            headRefName: string;
+            baseRefName: string;
+            isDraft: boolean;
+          }> = JSON.parse(raw);
+
+          if (prs.length > 0) return prInfoFromView(prs[0], project.repo);
         } catch {
           // fall through to issue-id fallback
         }
       }
 
-      // 2. Fallbacks: search open PRs when the recorded branch does not match
-      //    the actual PR branch used by the agent.
+      // 2. Fallback: search open PRs whose head branch contains the issue ID.
+      //    Handles agents (Codex, Aider, etc.) that push to a different branch
+      //    than the one recorded in session metadata (e.g. feat/22 vs feat/issue-22).
       if (session.issueId) {
         try {
-          const openPrs = await listOpenPRs(project.repo);
+          const raw = await gh([
+            "pr",
+            "list",
+            "--repo",
+            project.repo,
+            "--json",
+            "number,url,title,headRefName,baseRefName,isDraft",
+            "--limit",
+            "50",
+          ]);
 
-          const byIssueReference = openPrs.find((pr) => referencesIssue(pr, session.issueId!));
-          if (byIssueReference) return prInfoFromView(byIssueReference, project.repo);
+          const allPrs: Array<{
+            number: number;
+            url: string;
+            title: string;
+            headRefName: string;
+            baseRefName: string;
+            isDraft: boolean;
+          }> = JSON.parse(raw);
 
-          const byIssueBranch = openPrs.find((pr) => pr.headRefName.includes(session.issueId!));
-          if (byIssueBranch) return prInfoFromView(byIssueBranch, project.repo);
+          const match = allPrs.find((pr) => pr.headRefName.includes(session.issueId!));
+          if (match) return prInfoFromView(match, project.repo);
         } catch {
           return null;
         }
@@ -969,6 +1051,8 @@ function createGitHubSCM(): SCM {
     },
 
     async publishReview(pr: PRInfo, review: SCMReviewSubmission): Promise<void> {
+      await publishInlineComments(pr, review.comments ?? []);
+
       const outcomeFlag =
         review.outcome === "approve"
           ? "--approve"

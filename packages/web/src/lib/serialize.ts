@@ -21,17 +21,19 @@ import {
   findTaskLineageBySession,
   resolveModelRuntimeConfig,
 } from "@composio/ao-core";
-import type {
-  DashboardSession,
-  DashboardPR,
-  DashboardStats,
-  DashboardPromptPolicy,
-  DashboardSessionRuntime,
-  DashboardWorkflowChild,
-  DashboardWorkflowContext,
-  DashboardWorkflowEvent,
-  DashboardWorkflowParent,
-} from "./types.js";
+import {
+  hasActiveOpenPR,
+  sessionNeedsReview,
+  type DashboardSession,
+  type DashboardPR,
+  type DashboardStats,
+  type DashboardPromptPolicy,
+  type DashboardSessionRuntime,
+  type DashboardWorkflowChild,
+  type DashboardWorkflowContext,
+  type DashboardWorkflowEvent,
+  type DashboardWorkflowParent,
+} from "./types";
 import { TTLCache, prCache, prCacheKey, type PREnrichmentData } from "./cache";
 
 /** Cache for issue titles (5 min TTL — issue titles rarely change) */
@@ -757,8 +759,7 @@ export function computeStats(sessions: DashboardSession[]): DashboardStats {
   return {
     totalSessions: sessions.length,
     workingSessions: sessions.filter((s) => s.activity !== null && s.activity !== "exited").length,
-    openPRs: sessions.filter((s) => s.pr?.state === "open").length,
-    needsReview: sessions.filter((s) => s.pr && !s.pr.isDraft && s.pr.reviewDecision === "pending")
-      .length,
+    openPRs: sessions.filter(hasActiveOpenPR).length,
+    needsReview: sessions.filter(sessionNeedsReview).length,
   };
 }

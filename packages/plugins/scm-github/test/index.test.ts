@@ -677,15 +677,61 @@ describe("scm-github plugin", () => {
       });
       expect(ghMock).toHaveBeenCalledWith(
         "gh",
+        ["pr", "review", "42", "--repo", "acme/repo", "--comment", "--body", "Review note only."],
+        expect.any(Object),
+      );
+    });
+
+    it("publishes inline comments before the review summary when provided", async () => {
+      mockGh({ headRefOid: "abc123" });
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+      ghMock.mockResolvedValueOnce({ stdout: "" });
+
+      await scm.publishReview!(pr, {
+        outcome: "request_changes",
+        summary: "Please fix the noted issues.",
+        comments: [{ path: "src/index.ts", line: 14, body: "Guard the null path before use." }],
+      });
+
+      expect(ghMock).toHaveBeenNthCalledWith(
+        1,
+        "gh",
+        ["pr", "view", "42", "--repo", "acme/repo", "--json", "headRefOid"],
+        expect.any(Object),
+      );
+      expect(ghMock).toHaveBeenNthCalledWith(
+        2,
+        "gh",
+        [
+          "api",
+          "repos/acme/repo/pulls/42/comments",
+          "--method",
+          "POST",
+          "-f",
+          "body=Guard the null path before use.",
+          "-f",
+          "commit_id=abc123",
+          "-f",
+          "path=src/index.ts",
+          "-F",
+          "line=14",
+          "-f",
+          "side=RIGHT",
+        ],
+        expect.any(Object),
+      );
+      expect(ghMock).toHaveBeenNthCalledWith(
+        3,
+        "gh",
         [
           "pr",
           "review",
           "42",
           "--repo",
           "acme/repo",
-          "--comment",
+          "--request-changes",
           "--body",
-          "Review note only.",
+          "Please fix the noted issues.",
         ],
         expect.any(Object),
       );

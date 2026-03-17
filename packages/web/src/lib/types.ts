@@ -255,6 +255,45 @@ export function isPRMergeReady(pr: DashboardPR): boolean {
   );
 }
 
+export function isTerminalDashboardSession(session: {
+  status: SessionStatus;
+  activity: ActivityState | null;
+}): boolean {
+  return (
+    TERMINAL_STATUSES.has(session.status) ||
+    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
+  );
+}
+
+export function hasCompletedPR(
+  session: DashboardSession,
+): session is DashboardSession & { pr: DashboardPR } {
+  return Boolean(
+    session.pr &&
+      (session.status === SESSION_STATUS.MERGED ||
+        session.pr.state === "merged" ||
+        session.pr.state === "closed"),
+  );
+}
+
+export function hasActiveOpenPR(
+  session: DashboardSession,
+): session is DashboardSession & { pr: DashboardPR } {
+  return Boolean(
+    session.pr &&
+      session.pr.state === "open" &&
+      !isTerminalDashboardSession(session),
+  );
+}
+
+export function sessionNeedsReview(session: DashboardSession): boolean {
+  return Boolean(
+    hasActiveOpenPR(session) &&
+      !session.pr.isDraft &&
+      session.pr.reviewDecision === "pending",
+  );
+}
+
 /** Determines which attention zone a session belongs to */
 export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   // ── Done: terminal states ─────────────────────────────────────────

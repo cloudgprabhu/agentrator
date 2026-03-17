@@ -1306,6 +1306,46 @@ describe("computeStats", () => {
     expect(stats.totalSessions).toBe(5);
     expect(stats.workingSessions).toBe(3); // active + idle + ready
   });
+
+  it("excludes terminal sessions from open PR and needs review counts", () => {
+    const pendingPR = {
+      number: 1,
+      url: "https://github.com/test/repo/pull/1",
+      title: "Pending PR",
+      owner: "test",
+      repo: "repo",
+      branch: "feat/pending",
+      baseBranch: "main",
+      isDraft: false,
+      state: "open" as const,
+      additions: 10,
+      deletions: 2,
+      ciStatus: "passing" as const,
+      ciChecks: [],
+      reviewDecision: "pending" as const,
+      mergeability: {
+        mergeable: false,
+        ciPassing: true,
+        approved: false,
+        noConflicts: true,
+        blockers: [],
+      },
+      unresolvedThreads: 0,
+      unresolvedComments: [],
+    };
+    const sessions = [
+      makeDashboard({ id: "s1", status: "review_pending", activity: "idle", pr: pendingPR }),
+      makeDashboard({ id: "s2", status: "merged", activity: "exited", pr: pendingPR }),
+      makeDashboard({ id: "s3", status: "errored", activity: "exited", pr: pendingPR }),
+    ];
+
+    expect(computeStats(sessions)).toEqual({
+      totalSessions: 3,
+      workingSessions: 1,
+      openPRs: 1,
+      needsReview: 1,
+    });
+  });
 });
 
 describe("basicPRToDashboard defaults", () => {

@@ -2,17 +2,20 @@ import { NextResponse } from "next/server";
 import { getServices } from "@/lib/services";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { MULTI_AGENT_LABELS } from "@composio/ao-plugin-tracker-github";
 
 const execFileAsync = promisify(execFile);
 
 export const dynamic = "force-dynamic";
 
-const LABELS = [
+const BASE_LABELS = [
   { name: "agent:backlog", color: "6B7280", description: "Available for agent to claim" },
   { name: "agent:in-progress", color: "7C3AED", description: "Agent is working on this" },
   { name: "agent:blocked", color: "DC2626", description: "Agent is blocked" },
   { name: "agent:done", color: "16A34A", description: "Agent completed this" },
 ];
+
+const LABELS = [...BASE_LABELS, ...MULTI_AGENT_LABELS];
 
 /**
  * POST /api/setup-labels — Create agent labels on all configured repos.

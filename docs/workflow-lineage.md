@@ -130,7 +130,7 @@ The lineage store is updated from these workflow hooks:
 - `ao workflow create-issues` records created `childIssues` and initializes them as `queued`
 - `ao workflow implement` marks tracker-completed child issues as `done` when it encounters them
 - `ao workflow review` resolves child issues from either issue refs or PR refs and spawns the configured `reviewRole` with task-plan context
-- `ao workflow review-outcome` records reviewer decisions, publishes SCM-native PR reviews where supported (with tracker issue comments as fallback), updates child state, can route changes back to implementers, and can append follow-up child tasks
+- `ao workflow review-outcome` records reviewer decisions, publishes SCM-native PR/MR reviews where supported (with optional inline file comments from `--comment path:line:body` and tracker issue comments as fallback), updates child state, can route changes back to implementers, and can append follow-up child tasks
 - `sessionManager.spawn()` records implementation or review sessions when they target a known child issue and moves state to `in_progress` or `waiting_review`
 - `sessionManager.claimPR()` records PR linkage for the owning child issue and moves state to `pr_opened`, `changes_requested`, `approved`, or `done` based on PR state
 - SCM webhook handling can auto-spawn the configured reviewer role on PR `opened` and `synchronize` events when lineage resolves to a child issue and no reviewer handoff is already active

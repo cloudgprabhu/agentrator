@@ -76,11 +76,12 @@ If SCM webhooks are configured, PR `opened` and `synchronize` events can trigger
 ```bash
 ao workflow review-outcome my-app #101 --outcome approve --summary "Looks good to merge."
 ao workflow review-outcome my-app #101 --outcome request_changes --summary "Add regression coverage."
+ao workflow review-outcome my-app #101 --outcome request_changes --summary "Guard the auth fallback path." --comment "packages/core/src/auth.ts:84:Handle the null provider case before dereferencing."
 ao workflow review-outcome my-app #101 --outcome create_follow_up --summary "Document rollout." --follow-up-title "Add rollout docs"
 ao workflow review-outcome my-app #101 --outcome update_parent_summary --summary "Implementation is ready; rollout docs remain."
 ```
 
-These outcomes update lineage state and publish a first-class PR review when the linked SCM supports it, with tracker comments as fallback. `request_changes` can message an active implementer or spawn a new implementer session. `create_follow_up` appends a new child task and issue.
+These outcomes update lineage state and publish a first-class PR/MR review when the linked SCM supports it. Repeat `--comment path:line:body` to add inline file comments; if native review publishing is unavailable, AO falls back to tracker comments. `request_changes` can message an active implementer or spawn a new implementer session. `create_follow_up` appends a new child task and issue.
 
 ## Lineage
 

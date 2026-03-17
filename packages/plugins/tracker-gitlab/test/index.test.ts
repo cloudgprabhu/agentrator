@@ -424,6 +424,40 @@ describe("tracker-gitlab plugin", () => {
       );
     });
 
+    it("ignores parentIssueId and keeps GitLab on the lineage-plus-body baseline", async () => {
+      mockGlabRaw("https://gitlab.com/acme/repo/-/issues/1001\n");
+      mockGlab({
+        iid: 1001,
+        title: "Child issue",
+        description: "Description",
+        web_url: "https://gitlab.com/acme/repo/-/issues/1001",
+        state: "opened",
+        labels: [],
+        assignees: [],
+      });
+
+      await tracker.createIssue!(
+        { title: "Child issue", description: "Description", parentIssueId: "42" },
+        project,
+      );
+
+      expect(glabMock).toHaveBeenNthCalledWith(
+        1,
+        "glab",
+        [
+          "issue",
+          "create",
+          "--repo",
+          "acme/repo",
+          "--title",
+          "Child issue",
+          "--description",
+          "Description",
+        ],
+        expect.any(Object),
+      );
+    });
+
     it("throws when URL cannot be parsed from glab output", async () => {
       mockGlabRaw("unexpected output");
       await expect(

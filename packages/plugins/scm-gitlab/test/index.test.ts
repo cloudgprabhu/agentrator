@@ -415,6 +415,32 @@ describe("scm-gitlab plugin", () => {
     });
   });
 
+  describe("resolvePR", () => {
+    it("resolves an MR URL into PRInfo", async () => {
+      mockGlab({
+        iid: 42,
+        web_url: "https://gitlab.com/acme/repo/-/merge_requests/42",
+        title: "feat: add feature",
+        source_branch: "feat/my-feature",
+        target_branch: "main",
+        draft: false,
+      });
+
+      await expect(
+        scm.resolvePR?.("https://gitlab.com/acme/repo/-/merge_requests/42", project),
+      ).resolves.toEqual({
+        number: 42,
+        url: "https://gitlab.com/acme/repo/-/merge_requests/42",
+        title: "feat: add feature",
+        owner: "acme",
+        repo: "repo",
+        branch: "feat/my-feature",
+        baseBranch: "main",
+        isDraft: false,
+      });
+    });
+  });
+
   // ---- getPRState --------------------------------------------------------
 
   describe("getPRState", () => {
@@ -495,6 +521,109 @@ describe("scm-gitlab plugin", () => {
       expect(glabMock).toHaveBeenCalledWith(
         "glab",
         ["mr", "close", "42", "--repo", "acme/repo"],
+        expect.any(Object),
+      );
+    });
+  });
+
+  describe("publishReview", () => {
+    it("posts a native MR review note for comment-only outcomes", async () => {
+      glabMock.mockResolvedValueOnce({ stdout: "" });
+
+      await scm.publishReview!(pr, {
+        outcome: "comment",
+        summary: "Review note only.",
+      });
+
+      expect(glabMock).toHaveBeenCalledWith(
+        "glab",
+        [
+          "api",
+          "--method",
+          "POST",
+          "projects/acme%2Frepo/merge_requests/42/notes",
+          "-f",
+          "body=Workflow Review Outcome\nOutcome: comment\n\nReview note only.",
+        ],
+        expect.any(Object),
+      );
+    });
+
+    it("publishes inline discussions and approves the MR when requested", async () => {
+      mockGlab({
+        diff_refs: {
+          base_sha: "base123",
+          start_sha: "start123",
+          head_sha: "head123",
+        },
+      });
+      glabMock.mockResolvedValueOnce({ stdout: "" });
+      glabMock.mockResolvedValueOnce({ stdout: "" });
+      glabMock.mockResolvedValueOnce({ stdout: "" });
+
+      await scm.publishReview!(pr, {
+        outcome: "approve",
+        summary: "Looks good to merge.",
+        comments: [{ path: "src/index.ts", line: 22, body: "Keep this branch guard in place." }],
+      });
+
+      expect(glabMock).toHaveBeenNthCalledWith(
+        1,
+        "glab",
+        ["api", "projects/acme%2Frepo/merge_requests/42"],
+        expect.any(Object),
+      );
+      expect(glabMock).toHaveBeenNthCalledWith(
+        2,
+        "glab",
+        [
+          "api",
+          "--method",
+          "POST",
+          "projects/acme%2Frepo/merge_requests/42/discussions",
+          "-f",
+          "body=Keep this branch guard in place.",
+          "-f",
+          "position[position_type]=text",
+          "-f",
+          "position[base_sha]=base123",
+          "-f",
+          "position[start_sha]=start123",
+          "-f",
+          "position[head_sha]=head123",
+          "-f",
+          "position[old_path]=src/index.ts",
+          "-f",
+          "position[new_path]=src/index.ts",
+          "-F",
+          "position[new_line]=22",
+        ],
+        expect.any(Object),
+      );
+      expect(glabMock).toHaveBeenNthCalledWith(
+        3,
+        "glab",
+        [
+          "api",
+          "--method",
+          "POST",
+          "projects/acme%2Frepo/merge_requests/42/notes",
+          "-f",
+          "body=Workflow Review Outcome\nOutcome: approve\n\nLooks good to merge.",
+        ],
+        expect.any(Object),
+      );
+      expect(glabMock).toHaveBeenNthCalledWith(
+        4,
+        "glab",
+        [
+          "api",
+          "--method",
+          "POST",
+          "projects/acme%2Frepo/merge_requests/42/approve",
+          "-f",
+          "sha=head123",
+        ],
         expect.any(Object),
       );
     });
