@@ -56,6 +56,16 @@ const BOT_AUTHORS = new Set([
 
 type ExecCommand = "gh" | "git";
 
+interface PullRequestListEntry {
+  number: number;
+  url: string;
+  title: string;
+  body?: string;
+  headRefName: string;
+  baseRefName: string;
+  isDraft: boolean;
+}
+
 async function execCli(bin: ExecCommand, args: string[], cwd?: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync(bin, args, {
@@ -89,6 +99,49 @@ function parseProjectRepo(projectRepo: string): [string, string] {
     throw new Error(`Invalid repo format "${projectRepo}", expected "owner/repo"`);
   }
   return [parts[0], parts[1]];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function referencesIssue(pr: Pick<PullRequestListEntry, "title" | "body">, issueId: string): boolean {
+  const pattern = new RegExp(`(^|[^\\w-])#${escapeRegExp(issueId)}(?![\\w-])`, "i");
+  return pattern.test(pr.title) || pattern.test(pr.body ?? "");
+}
+
+async function searchPRByBranch(branch: string, projectRepo: string): Promise<PRInfo | null> {
+  const raw = await gh([
+    "pr",
+    "list",
+    "--repo",
+    projectRepo,
+    "--head",
+    branch,
+    "--json",
+    "number,url,title,headRefName,baseRefName,isDraft",
+    "--limit",
+    "1",
+  ]);
+
+  const prs: PullRequestListEntry[] = JSON.parse(raw);
+  if (prs.length === 0) return null;
+  return prInfoFromView(prs[0], projectRepo);
+}
+
+async function listOpenPRs(projectRepo: string): Promise<PullRequestListEntry[]> {
+  const raw = await gh([
+    "pr",
+    "list",
+    "--repo",
+    projectRepo,
+    "--json",
+    "number,url,title,body,headRefName,baseRefName,isDraft",
+    "--limit",
+    "100",
+  ]);
+
+  return JSON.parse(raw) as PullRequestListEntry[];
 }
 
 function prInfoFromView(
@@ -561,61 +614,24 @@ function createGitHubSCM(): SCM {
       // 1. Try exact branch match (primary path)
       if (session.branch) {
         try {
-          const raw = await gh([
-            "pr",
-            "list",
-            "--repo",
-            project.repo,
-            "--head",
-            session.branch,
-            "--json",
-            "number,url,title,headRefName,baseRefName,isDraft",
-            "--limit",
-            "1",
-          ]);
-
-          const prs: Array<{
-            number: number;
-            url: string;
-            title: string;
-            headRefName: string;
-            baseRefName: string;
-            isDraft: boolean;
-          }> = JSON.parse(raw);
-
-          if (prs.length > 0) return prInfoFromView(prs[0], project.repo);
+          const byBranch = await searchPRByBranch(session.branch, project.repo);
+          if (byBranch) return byBranch;
         } catch {
           // fall through to issue-id fallback
         }
       }
 
-      // 2. Fallback: search open PRs whose head branch contains the issue ID.
-      //    Handles agents (Codex, Aider, etc.) that push to a different branch
-      //    than the one recorded in session metadata (e.g. feat/22 vs feat/issue-22).
+      // 2. Fallbacks: search open PRs when the recorded branch does not match
+      //    the actual PR branch used by the agent (e.g. feat/22 vs feat/issue-22).
       if (session.issueId) {
         try {
-          const raw = await gh([
-            "pr",
-            "list",
-            "--repo",
-            project.repo,
-            "--json",
-            "number,url,title,headRefName,baseRefName,isDraft",
-            "--limit",
-            "50",
-          ]);
+          const openPrs = await listOpenPRs(project.repo);
 
-          const allPrs: Array<{
-            number: number;
-            url: string;
-            title: string;
-            headRefName: string;
-            baseRefName: string;
-            isDraft: boolean;
-          }> = JSON.parse(raw);
+          const byIssueReference = openPrs.find((pr) => referencesIssue(pr, session.issueId!));
+          if (byIssueReference) return prInfoFromView(byIssueReference, project.repo);
 
-          const match = allPrs.find((pr) => pr.headRefName.includes(session.issueId!));
-          if (match) return prInfoFromView(match, project.repo);
+          const byIssueBranch = openPrs.find((pr) => pr.headRefName.includes(session.issueId!));
+          if (byIssueBranch) return prInfoFromView(byIssueBranch, project.repo);
         } catch {
           return null;
         }
