@@ -19,6 +19,37 @@ import type {
 const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
+// Multi-agent workflow labels
+// ---------------------------------------------------------------------------
+
+export const MULTI_AGENT_LABELS = [
+  // coding — blue
+  { name: "agent:coding", color: "1D4ED8", description: "Coding phase" },
+  { name: "agent:coding:in-progress", color: "2563EB", description: "Coding in progress" },
+  { name: "agent:coding:done", color: "3B82F6", description: "Coding complete" },
+  // ci — orange
+  { name: "agent:ci", color: "C2410C", description: "CI phase" },
+  { name: "agent:ci:in-progress", color: "EA580C", description: "CI in progress" },
+  { name: "agent:ci:done", color: "FB923C", description: "CI complete" },
+  // testing — green
+  { name: "agent:testing", color: "15803D", description: "Testing phase" },
+  { name: "agent:testing:in-progress", color: "16A34A", description: "Testing in progress" },
+  { name: "agent:testing:done", color: "4ADE80", description: "Testing complete" },
+  // documenting — purple
+  { name: "agent:documenting", color: "7E22CE", description: "Documenting phase" },
+  { name: "agent:documenting:in-progress", color: "9333EA", description: "Documenting in progress" },
+  { name: "agent:documenting:done", color: "C084FC", description: "Documenting complete" },
+  // validating — teal
+  { name: "agent:validating", color: "0F766E", description: "Validating phase" },
+  { name: "agent:validating:in-progress", color: "0D9488", description: "Validating in progress" },
+  { name: "agent:validating:done", color: "2DD4BF", description: "Validating complete" },
+  // merging — gray
+  { name: "agent:merging", color: "374151", description: "Merging phase" },
+  { name: "agent:merging:in-progress", color: "6B7280", description: "Merging in progress" },
+  { name: "agent:merging:done", color: "9CA3AF", description: "Merging complete" },
+];
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
